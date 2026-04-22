@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Habit Terminal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="background-grid" aria-hidden="true"></div>
+    <main class="app-shell">
+      <section class="hero panel">
+        <div class="eyebrow">habit://ai-assisted-tracking</div>
+        <h1>Habit Terminal</h1>
+        <p class="hero-copy">
+          Type habits in plain English. The frontend talks to a backend API, habits are stored
+          in a real SQLite database, and every day can be marked done or skipped on a calendar graph.
+        </p>
+        <div class="hero-status">
+          <span id="inference-status" class="status-pill">AI fallback ready</span>
+          <span id="storage-status" class="status-pill">Persistent storage online</span>
+        </div>
+      </section>
+
+      <section class="composer panel">
+        <div class="panel-title">New Habit</div>
+        <form id="habit-form">
+          <label class="sr-only" for="habit-input">Habit description</label>
+          <textarea
+            id="habit-input"
+            rows="3"
+            placeholder="Try: Run 5 km every Monday, Wednesday, and Friday"
+          ></textarea>
+          <div class="form-row">
+            <button type="submit" class="primary-button">Infer and create habit</button>
+            <div id="composer-feedback" class="helper-text">
+              Describe a habit naturally and the app will suggest cadence details.
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <section class="overview">
+        <article class="panel stat-card">
+          <div class="panel-title">Habits</div>
+          <div id="habit-count" class="stat-value">0</div>
+          <div class="helper-text">Unlimited habits supported.</div>
+        </article>
+        <article class="panel stat-card">
+          <div class="panel-title">Completed Today</div>
+          <div id="done-today-count" class="stat-value">0</div>
+          <div class="helper-text">Entries marked as done for today.</div>
+        </article>
+        <article class="panel stat-card">
+          <div class="panel-title">Skipped Today</div>
+          <div id="skipped-today-count" class="stat-value">0</div>
+          <div class="helper-text">Entries marked as skipped for today.</div>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <div>
+            <div class="panel-title">Habit Matrix</div>
+            <div class="helper-text">Each habit keeps its own cadence and calendar history.</div>
+          </div>
+        </div>
+        <div id="habit-list" class="habit-list"></div>
+      </section>
+    </main>
+
+    <template id="habit-card-template">
+      <article class="habit-card">
+        <div class="habit-header">
+          <div>
+            <div class="habit-name"></div>
+            <div class="habit-meta"></div>
+          </div>
+          <div class="habit-actions">
+            <button class="action-button done-button">Mark done</button>
+            <button class="action-button skip-button">Mark skipped</button>
+          </div>
+        </div>
+        <div class="habit-rationale"></div>
+        <div class="streak-row">
+          <div class="mini-stat">
+            <span class="mini-label">Scheduled this week</span>
+            <strong class="scheduled-count">0</strong>
+          </div>
+          <div class="mini-stat">
+            <span class="mini-label">Done this week</span>
+            <strong class="done-count">0</strong>
+          </div>
+          <div class="mini-stat">
+            <span class="mini-label">Skipped this week</span>
+            <strong class="skipped-count">0</strong>
+          </div>
+        </div>
+        <div class="calendar-wrap">
+          <div class="calendar-legend">
+            <span><i class="legend-box legend-none"></i> Not logged</span>
+            <span><i class="legend-box legend-done"></i> Done</span>
+            <span><i class="legend-box legend-skipped"></i> Skipped</span>
+            <span><i class="legend-box legend-scheduled"></i> Scheduled</span>
+          </div>
+          <div class="calendar-grid"></div>
+        </div>
+      </article>
+    </template>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

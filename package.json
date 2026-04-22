@@ -1,0 +1,10 @@
+{
+  "name": "habit-web-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI-assisted habit tracking web application",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  }
+}
