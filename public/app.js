@@ -799,7 +799,7 @@ function isStreakWindowComplete(habit, window) {
     return scheduledDates.every((date) => entryForHabitAndDate(habit.id, date)?.status === "done");
   }
 
-  if (habit.unit === "times") {
+  if (usesWindowQuotaTarget(habit)) {
     const doneCount = entries.filter((entry) => entry.status === "done").length;
     return doneCount >= habit.targetCount;
   }
@@ -1424,7 +1424,7 @@ function progressWindowForHabit(habit) {
 }
 
 function targetOccurrencesForWindow(habit, window) {
-  if (habit.unit === "times") {
+  if (usesWindowQuotaTarget(habit)) {
     return habit.targetCount;
   }
 
@@ -1437,6 +1437,11 @@ function targetOccurrencesForWindow(habit, window) {
   }
 
   return 1;
+}
+
+function usesWindowQuotaTarget(habit) {
+  const unit = String(habit.unit || "").trim().toLowerCase();
+  return unit === "times" || unit === "time" || unit === "session" || unit === "sessions";
 }
 
 function buildEmptyCard(title, copy) {
