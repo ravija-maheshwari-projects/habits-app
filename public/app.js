@@ -1152,7 +1152,7 @@ function buildTodayCard(habit, entry) {
 function compactCadence(habit) {
   const days = habit.weeklyDays?.length
     ? habit.weeklyDays.map(shortDayName).join(" · ")
-    : `every ${habit.periodDays} day${habit.periodDays === 1 ? "" : "s"}`;
+    : cadenceFrequencyLabel(habit);
   const target = `${habit.targetCount} ${habit.unit}`;
   return `${target} · ${days}`;
 }
@@ -1430,6 +1430,9 @@ function targetOccurrencesForWindow(habit, window) {
 function buildEmptyCard(title, copy) {
   const card = document.createElement("section");
   card.className = "empty-card";
+  if (title === "No habits yet") {
+    card.classList.add("empty-card--top-spaced");
+  }
   card.innerHTML = `
     <div class="panel-title">Nothing here yet</div>
     <h2>${escapeHtml(title)}</h2>
@@ -1640,7 +1643,19 @@ function cadenceExplanation(habit) {
     return `Tracking on ${habit.weeklyDays.map(shortDayName).join(", ")} · target ${habit.targetCount} ${habit.unit}.`;
   }
 
-  return `Tracking ${habit.targetCount} ${habit.unit} every ${habit.periodDays} day${habit.periodDays === 1 ? "" : "s"}.`;
+  if (habit.periodDays === 1) {
+    return `Tracking daily · target ${habit.targetCount} ${habit.unit}.`;
+  }
+
+  return `Tracking ${habit.targetCount} ${habit.unit} ${cadenceFrequencyLabel(habit)}.`;
+}
+
+function cadenceFrequencyLabel(habit) {
+  if (habit.periodDays === 1) {
+    return "daily";
+  }
+
+  return `every ${habit.periodDays} day${habit.periodDays === 1 ? "" : "s"}`;
 }
 
 function renderLogSheet() {

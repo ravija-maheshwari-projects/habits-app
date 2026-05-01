@@ -24,8 +24,68 @@ async function inferHabitWithOpenAI(description) {
         content: [
           {
             type: "input_text",
-            text:
-              "You infer habit tracking settings from natural language. Return only valid JSON with keys: name, category, rationale, cadence. cadence must contain targetCount, periodDays, weeklyDays, unit. Preserve any explicit quantity and unit from the user, such as 10 minutes, 5 km, 20 pages, or 3 times. Do not replace those with schedule counts like 7 days or 1 day. Interpret cadence using these rules: phrases like 'every day', 'daily', 'each day', or 'every day in a week' mean a daily cadence with targetCount 1, periodDays 1, and weeklyDays []. Phrases like 'N times a week' or 'N times per week' mean any N completions in a 7-day window with targetCount N, periodDays 7, and weeklyDays []. Phrases like 'N times a month' or 'N times per month' mean any N completions in a 30-day window with targetCount N, periodDays 30, and weeklyDays []. Phrases like 'N times a year' or 'N times per year' mean any N completions in a 365-day window with targetCount N, periodDays 365, and weeklyDays []. Only use weeklyDays when the user explicitly names weekdays such as Monday, Wednesday, Friday, Mon Wed Fri, or 'on Mon Wed Fri of a week'. For explicit weekday phrases, keep periodDays 7 and set targetCount to the number of named days unless the user explicitly says otherwise. Treat spelled-out counts like one, two, three, four, and five the same as digits. Preserve explicit measurement units like minutes, hours, pages, km, miles, glasses, and cups. Examples: 'gym every day' -> targetCount 1, periodDays 1, weeklyDays []; 'gym every day in a week' -> targetCount 1, periodDays 1, weeklyDays []; 'gym 3 times a week' -> targetCount 3, periodDays 7, weeklyDays []; 'gym three times a week' -> targetCount 3, periodDays 7, weeklyDays []; 'gym 3 times a month' -> targetCount 3, periodDays 30, weeklyDays []; 'gym 3 times a year' -> targetCount 3, periodDays 365, weeklyDays []; 'gym Monday Wednesday Friday' -> targetCount 3, periodDays 7, weeklyDays [1,3,5]; 'gym on Mon Wed Fri' -> targetCount 3, periodDays 7, weeklyDays [1,3,5]; 'gym on Mon Wed Fri of a week' -> targetCount 3, periodDays 7, weeklyDays [1,3,5]. In rationale, describe daily phrasing as daily, describe week/month/year count phrasing as completions within that window, and describe named weekday phrasing as fixed weekly days."
+            text: `You are a habit tracking parser. Extract structured habit data from natural language input.
+
+Return ONLY a valid JSON object with this exact shape:
+{
+  "name": string,
+  "category": string,
+  "rationale": string,
+  "cadence": {
+    "targetCount": number,
+    "periodDays": number,
+    "weeklyDays": number[],
+    "unit": string
+  }
+}
+
+## UNIT
+Preserve any explicit quantity and unit from the user (e.g. "10 minutes", "5 km", "20 pages").
+Do NOT substitute schedule counts (like "7 days") for measurement units.
+Valid units include minutes, hours, pages, km, miles, glasses, cups, times, reps, session, time, and similar concrete habit units.
+If a quantity is provided (e.g. "5 km"), targetCount should be that number (5) and unit should be that unit (km).
+If no quantity is provided (e.g. "go to the gym"), targetCount defaults to 1 and unit defaults to "session" or "time".
+
+## CADENCE RULES (in priority order)
+
+1. NAMED WEEKDAYS - user explicitly names days (e.g. "Monday Wednesday Friday", "Mon/Wed/Fri")
+   -> periodDays: 7, weeklyDays: [<day indices>], targetCount: number of named days
+   Day index: Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6, Sun=7
+
+2. DAILY - "every day", "daily", "each day", "every day in a week"
+   -> targetCount: 1, periodDays: 1, weeklyDays: []
+
+3. N TIMES A WEEK - "N times a week / per week"
+   -> targetCount: N, periodDays: 7, weeklyDays: []
+
+4. N TIMES A MONTH - "N times a month / per month"
+   -> targetCount: N, periodDays: 30, weeklyDays: []
+
+5. N TIMES A YEAR - "N times a year / per year"
+   -> targetCount: N, periodDays: 365, weeklyDays: []
+
+6. EVERY OTHER DAY - "every other day", "alternate days"
+   -> targetCount: 1, periodDays: 2, weeklyDays: []
+
+7. EVERY WEEKDAY - "every weekday", "on weekdays", "Monday to Friday"
+   -> targetCount: 5, periodDays: 7, weeklyDays: [1,2,3,4,5]
+
+8. EVERY WEEKEND - "every weekend", "on weekends"
+   -> targetCount: 2, periodDays: 7, weeklyDays: [6,7]
+
+9. FORTNIGHTLY - "every two weeks", "fortnightly", "biweekly"
+   -> targetCount: 1, periodDays: 14, weeklyDays: []
+   Note: "biweekly" is ambiguous - always treat it as every 2 weeks, never twice a week.
+
+10. AMBIGUOUS/MISSING - "regularly", "often", "sometimes", "a few times", or no frequency given
+    -> default to: targetCount: 1, periodDays: 1, weeklyDays: []
+    Set rationale to: "Frequency was unclear, defaulted to daily"
+
+## ADDITIONAL RULES
+- Treat spelled-out counts like one, two, three, four, and five the same as digits.
+- Only populate weeklyDays when the user explicitly names weekdays or clearly means weekdays/weekends.
+- For rationale, briefly explain how the cadence was interpreted.
+- Return only JSON with no markdown or extra explanation.`
           }
         ]
       },
@@ -60,7 +120,7 @@ async function inferHabitWithOpenAI(description) {
                 periodDays: { type: "integer", minimum: 1, maximum: 365 },
                 weeklyDays: {
                   type: "array",
-                  items: { type: "integer", minimum: 0, maximum: 6 }
+                  items: { type: "integer", minimum: 1, maximum: 7 }
                 },
                 unit: { type: "string" }
               }
@@ -248,7 +308,19 @@ function normalizePositiveInteger(value, fallback) {
 }
 
 function normalizeWeeklyDays(days) {
-  return [...new Set(days.map((day) => Number(day)).filter((day) => day >= 0 && day <= 6))].sort();
+  return [
+    ...new Set(
+      days
+        .map((day) => Number(day))
+        .map((day) => {
+          if (day >= 1 && day <= 6) return day;
+          if (day === 7) return 0;
+          if (day >= 0 && day <= 6) return day;
+          return null;
+        })
+        .filter((day) => day !== null)
+    )
+  ].sort();
 }
 
 module.exports = {

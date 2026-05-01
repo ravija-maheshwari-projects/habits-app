@@ -1,4 +1,4 @@
-# TrackrAI
+# HabitAI
 
 AI-assisted habit tracking web app with:
 

@@ -1,5 +1,5 @@
 /* ============================================================
-   TrackrAI — Poster edition
+   HabitAI — Poster edition
    Editorial-illustrative aesthetic, warm paper palette, riso grain
    ============================================================ */
 
@@ -329,6 +329,9 @@ body.is-habit-detail .app-header {
   border-radius: 22px;
   padding: 24px 20px;
   text-align: left;
+}
+.empty-card--top-spaced {
+  margin-top: 10px;
 }
 .empty-card .panel-title {
   font-family: var(--sans);

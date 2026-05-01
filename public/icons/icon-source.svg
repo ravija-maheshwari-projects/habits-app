@@ -1,0 +1,39 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Habit Terminal">
+  <defs>
+    
+    <filter id="grain" x="-5%" y="-5%" width="110%" height="110%">
+      <feTurbulence type="fractalNoise" baseFrequency="1.4" numOctaves="2" stitchTiles="stitch" seed="7"></feTurbulence>
+      <feColorMatrix values="0 0 0 0 0   0 0 0 0 0   0 0 0 0 0   0 0 0 0.10 0"></feColorMatrix>
+      <feComposite in2="SourceGraphic" operator="in"></feComposite>
+    </filter>
+    <clipPath id="tile">
+      <rect x="0" y="0" width="1024" height="1024"></rect>
+    </clipPath>
+    <clipPath id="upper">
+      <rect x="0" y="0" width="1024" height="660"></rect>
+    </clipPath>
+  </defs>
+
+  
+  <g clip-path="url(#tile)">
+    <rect width="1024" height="1024" fill="#E96A4A"></rect>
+
+    
+    <g clip-path="url(#upper)">
+      <circle cx="512" cy="640" r="300" fill="#F0B341"></circle>
+    </g>
+
+    
+    <path d="M 150 820 Q 380 80 880 380" fill="none" stroke="#F5EAD9" stroke-width="62" stroke-linecap="round"></path>
+
+    
+    <circle cx="150" cy="820" r="44" fill="#F5EAD9"></circle>
+
+    
+    <rect x="0" y="660" width="1024" height="14" fill="#1A1D2E"></rect>
+
+    
+    <rect width="1024" height="1024" fill="#1A1D2E" filter="url(#grain)" opacity="0.55"></rect>
+  </g>
+</svg>

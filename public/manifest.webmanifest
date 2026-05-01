@@ -1,6 +1,6 @@
 {
-  "name": "TrackrAI",
-  "short_name": "Trackr",
+  "name": "HabitAI",
+  "short_name": "HabitAI",
   "description": "Track habits from your home screen with offline local persistence.",
   "start_url": "/",
   "scope": "/",
@@ -10,10 +10,22 @@
   "orientation": "portrait",
   "icons": [
     {
-      "src": "/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "src": "/icons/icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
     }
   ]
 }
