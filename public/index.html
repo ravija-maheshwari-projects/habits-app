@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Habit Terminal</title>
-    <meta name="theme-color" content="#f4f7f5" />
+    <meta name="theme-color" content="#f0e5d0" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Habit Terminal" />
@@ -15,20 +15,28 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500;1,9..144,600&family=Inter:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <main class="app-shell">
-      <header class="app-header">
+      <header id="app-header" class="app-header" data-variant="poster">
+        <div class="header-blob" aria-hidden="true"></div>
+        <svg class="header-mountains" viewBox="0 0 390 200" preserveAspectRatio="none" aria-hidden="true">
+          <path d="M0 140 L 70 80 L 110 110 L 170 60 L 230 100 L 310 50 L 390 110 L 390 200 L 0 200 Z"
+            fill="#2d4d35" opacity="0.6"/>
+          <path d="M0 170 L 60 130 L 130 155 L 200 120 L 280 150 L 360 125 L 390 145 L 390 200 L 0 200 Z"
+            fill="#1a1d2e" opacity="0.85"/>
+        </svg>
         <div class="header-copy">
-          <div id="header-kicker" class="header-kicker">Today</div>
-          <h1 id="header-title">Good day</h1>
-          <p id="header-subtitle" class="header-subtitle">
-            A calm place to keep your habits moving.
-          </p>
+          <div class="header-meta-row">
+            <div id="header-kicker" class="header-kicker">Today</div>
+            <div class="header-avatar" aria-hidden="true">A</div>
+          </div>
+          <h1 id="header-title" class="header-title">Good day</h1>
+          <p id="header-subtitle" class="header-subtitle" hidden></p>
         </div>
       </header>
 
@@ -36,23 +44,16 @@
       <section id="insights-view" class="screen-view" hidden></section>
       <section id="habit-detail-view" class="screen-view" hidden></section>
 
-      <button
-        id="floating-add-button"
-        class="floating-add-button"
-        type="button"
-        aria-label="Add habit"
-      >
-        <span class="floating-add-plus">+</span>
-      </button>
-
       <nav class="bottom-nav" aria-label="Primary">
-        <button class="bottom-nav-item is-active" data-nav-view="today" type="button">
-          <span class="bottom-nav-icon">◉</span>
-          <span>Today</span>
-        </button>
-        <button class="bottom-nav-item" data-nav-view="insights" type="button">
-          <span class="bottom-nav-icon">◌</span>
-          <span>Insights</span>
+        <button class="bottom-nav-item is-active" data-nav-view="today" type="button">Today</button>
+        <button class="bottom-nav-item" data-nav-view="insights" type="button">Insights</button>
+        <button
+          id="floating-add-button"
+          class="floating-add-button"
+          type="button"
+          aria-label="Add habit"
+        >
+          <span class="floating-add-plus">+</span>
         </button>
       </nav>
     </main>
@@ -62,7 +63,7 @@
       <div class="composer-sheet" role="dialog" aria-modal="true" aria-labelledby="composer-title">
         <div class="sheet-handle" aria-hidden="true"></div>
         <div class="composer-sheet-header">
-          <h2 id="composer-title">Create Habit</h2>
+          <h2 id="composer-title">A new <em>habit.</em></h2>
         </div>
         <form id="habit-form" class="composer-form">
           <div id="habit-title-field" class="form-field" hidden>
@@ -73,10 +74,10 @@
           <textarea
             id="habit-input"
             rows="4"
-            placeholder="Try: Walk for 30 minutes every weekday morning"
+            placeholder="Say it the way you'd say it to a friend…"
           ></textarea>
           <div class="composer-actions">
-            <button id="habit-submit-button" type="submit" class="primary-button">Infer and create habit</button>
+            <button id="habit-submit-button" type="submit" class="primary-button">Save habit ✦</button>
             <p id="composer-feedback" class="composer-feedback" hidden></p>
           </div>
         </form>
@@ -88,10 +89,8 @@
       <div class="composer-sheet log-sheet" role="dialog" aria-modal="true" aria-labelledby="log-sheet-title">
         <div class="sheet-handle" aria-hidden="true"></div>
         <div class="composer-sheet-header">
-          <div>
-            <h2 id="log-sheet-title">Log day</h2>
-            <p id="log-sheet-subtitle" class="composer-feedback"></p>
-          </div>
+          <h2 id="log-sheet-title">Log day</h2>
+          <p id="log-sheet-subtitle" class="composer-feedback"></p>
         </div>
         <div class="composer-form log-sheet-actions">
           <button id="log-sheet-done" type="button" class="action-button done-button">Mark done</button>
@@ -105,37 +104,19 @@
     <template id="today-card-template">
       <article class="today-card">
         <div class="swipe-actions" aria-hidden="true">
-          <div class="swipe-action swipe-action-done">
-            <span class="swipe-action-icon">✓</span>
-          </div>
-          <div class="swipe-action swipe-action-skip">
-            <span class="swipe-action-icon">↷</span>
-          </div>
+          <div class="swipe-action swipe-action-done">✓</div>
+          <div class="swipe-action swipe-action-skip">✕</div>
         </div>
         <div class="today-card-content">
-          <div class="today-card-top">
-            <div>
-              <h2 class="today-card-title"></h2>
-              <p class="today-card-meta"></p>
-            </div>
+          <div class="tile">
+            <img class="tile-illo" alt="" />
           </div>
-          <div class="progress-row">
-            <div class="progress-copy">
-              <span class="progress-label progress-window-label"></span>
-              <strong class="progress-value progress-window-value"></strong>
-            </div>
+          <div class="today-card-body">
+            <div class="today-card-cat"></div>
+            <h2 class="today-card-title"></h2>
+            <p class="today-card-meta"></p>
           </div>
-          <div class="progress-visuals">
-            <div class="progress-track-group">
-              <div class="progress-track-copy">
-                <span class="progress-track-label progress-track-window-label"></span>
-                <span class="progress-track-meta progress-track-window-meta"></span>
-              </div>
-              <div class="progress-track">
-                <div class="progress-fill progress-window-fill"></div>
-              </div>
-            </div>
-          </div>
+          <div class="today-card-pip"></div>
         </div>
       </article>
     </template>
@@ -144,7 +125,6 @@
       <article class="habit-row-card">
         <button class="habit-row-button" type="button">
           <div class="habit-row-leading">
-            <div class="habit-row-dot"></div>
             <div>
               <h2 class="habit-row-title"></h2>
               <p class="habit-row-meta"></p>
@@ -152,7 +132,6 @@
           </div>
           <div class="habit-row-trailing">
             <span class="habit-row-status"></span>
-            <span class="habit-row-chevron">›</span>
           </div>
         </button>
       </article>

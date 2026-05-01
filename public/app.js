@@ -21,15 +21,78 @@ const state = {
   isLogSheetOpen: false,
   selectedLogDate: "",
   selectedLogHabitId: null,
+  detailMonthOffset: 0,
   isOnline: navigator.onLine,
   storageReady: false
 };
 
 const SWIPE_TRIGGER = 76;
 const SWIPE_MAX = 132;
+const EDGE_BACK_START = 28;
+const EDGE_BACK_TRIGGER = 84;
+
+/* ── Poster palette + illustration mapping ──────────────────── */
+const COLOR_KEYS = ["coral", "ochre", "sage", "plum", "sky"];
+
+const ILLO_BY_KEYWORD = [
+  // [regex, illustration]
+  [/walk|run|step|jog|hike|stroll|move/i, "walker"],
+  [/read|book|study|learn|journal|write/i, "book"],
+  [/sleep|bed|night|phone|screen|meditat/i, "moon"],
+  [/lift|gym|strength|train|workout|push|pull/i, "lift"],
+  [/water|drink|hydrate|tea|coffee|cup/i, "cup"],
+  [/garden|plant|grow|nature|outdoor/i, "sprout"],
+  [/sun|morning|wake|dawn/i, "sun"]
+];
+
+const CATEGORY_COLOR = {
+  movement: "coral",
+  fitness: "coral",
+  exercise: "coral",
+  strength: "sage",
+  mind: "ochre",
+  learning: "ochre",
+  reading: "ochre",
+  focus: "plum",
+  sleep: "plum",
+  health: "sage",
+  wellness: "sage",
+  creativity: "plum",
+  social: "sky",
+  finance: "sky",
+  productivity: "sky"
+};
+
+function illoForHabit(habit) {
+  const text = `${habit.name || ""} ${habit.originalPrompt || ""} ${habit.category || ""}`;
+  for (const [regex, illo] of ILLO_BY_KEYWORD) {
+    if (regex.test(text)) return illo;
+  }
+  return "sun";
+}
+
+function colorForHabit(habit) {
+  const cat = (habit.category || "").toLowerCase();
+  for (const key of Object.keys(CATEGORY_COLOR)) {
+    if (cat.includes(key)) return CATEGORY_COLOR[key];
+  }
+  // Stable fallback based on habit id so colors stay put across renders
+  const id = habit.id || habit.name || "";
+  let h = 0;
+  for (let i = 0; i < id.length; i += 1) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return COLOR_KEYS[h % COLOR_KEYS.length];
+}
+
+function applyAccent(el, colorKey) {
+  el.style.setProperty("--accent", `var(--${colorKey})`);
+  el.style.setProperty("--accent-deep", `var(--${colorKey}-deep)`);
+  el.style.setProperty("--accent-tint", `var(--${colorKey}-tint)`);
+}
 
 const elements = {
+  appHeader: document.querySelector("#app-header"),
   headerKicker: document.querySelector("#header-kicker"),
+  headerAvatar: document.querySelector(".header-avatar"),
   headerTitle: document.querySelector("#header-title"),
   headerSubtitle: document.querySelector("#header-subtitle"),
   todayView: document.querySelector("#today-view"),
@@ -121,7 +184,7 @@ function bindEvents() {
       return;
     }
 
-    setComposerFeedback(isEditing ? "Updating cadence and saving your changes..." : "Inferring cadence and saving to this device...");
+    setComposerFeedback(isEditing ? "Updating cadence and saving your changes…" : "Inferring cadence and saving to this device…");
 
     try {
       const inference = await postJson("/api/infer-habit", { description });
@@ -138,7 +201,7 @@ function bindEvents() {
         });
 
         state.selectedHabitId = updatedHabit.id;
-        setComposerFeedback(`${updatedHabit.name} updated on this device. ${inference.rationale}`);
+        setComposerFeedback(`${updatedHabit.name} updated. ${inference.rationale}`);
       } else {
         const createdHabit = await createHabit({
           name: inference.name,
@@ -151,7 +214,7 @@ function bindEvents() {
         });
 
         state.selectedHabitId = createdHabit.id;
-        setComposerFeedback(`${inference.name} saved to this phone. ${inference.rationale}`);
+        setComposerFeedback(`${inference.name} saved. ${inference.rationale}`);
       }
 
       closeComposer();
@@ -169,6 +232,8 @@ function bindEvents() {
 
   elements.todayView.addEventListener("click", handleViewActions);
   elements.habitDetailView.addEventListener("click", handleViewActions);
+  elements.insightsView.addEventListener("click", handleViewActions);
+  initializeDetailEdgeBack();
   elements.logSheetDone.addEventListener("click", () => void saveSelectedLogDate("done"));
   elements.logSheetSkip.addEventListener("click", () => void saveSelectedLogDate("skipped"));
   elements.logSheetClear.addEventListener("click", () => void clearSelectedLogDate());
@@ -191,6 +256,105 @@ function bindEvents() {
   });
 }
 
+function initializeDetailEdgeBack() {
+  const view = elements.habitDetailView;
+  let pointerId = null;
+  let startX = 0;
+  let startY = 0;
+  let dragging = false;
+  let tracking = false;
+
+  function resetView() {
+    view.classList.remove("is-edge-backing");
+    view.style.removeProperty("--edge-back-x");
+    view.style.removeProperty("--edge-back-opacity");
+  }
+
+  view.addEventListener("pointerdown", (event) => {
+    if (state.activeView !== "habitDetail" || state.isComposerOpen || state.isLogSheetOpen) {
+      return;
+    }
+
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+
+    if (event.clientX > EDGE_BACK_START) {
+      return;
+    }
+
+    pointerId = event.pointerId;
+    startX = event.clientX;
+    startY = event.clientY;
+    tracking = true;
+    dragging = false;
+  });
+
+  view.addEventListener("pointermove", (event) => {
+    if (!tracking || event.pointerId !== pointerId) {
+      return;
+    }
+
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+
+    if (!dragging) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) {
+        tracking = false;
+        pointerId = null;
+        return;
+      }
+
+      if (dx < 6) {
+        return;
+      }
+
+      if (Math.abs(dx) > Math.abs(dy) * 1.2) {
+        dragging = true;
+        view.classList.add("is-edge-backing");
+        if (typeof view.setPointerCapture === "function") {
+          view.setPointerCapture(pointerId);
+        }
+      } else {
+        return;
+      }
+    }
+
+    const resisted = Math.min(Math.max(dx, 0), 140) * 0.92;
+    const opacity = Math.max(0.7, 1 - resisted / 320);
+    view.style.setProperty("--edge-back-x", `${resisted}px`);
+    view.style.setProperty("--edge-back-opacity", `${opacity}`);
+  });
+
+  function finish(event) {
+    if (event.pointerId !== pointerId) {
+      return;
+    }
+
+    const dx = event.clientX - startX;
+    const shouldGoBack = dragging && dx >= EDGE_BACK_TRIGGER;
+
+    if (dragging && typeof view.releasePointerCapture === "function" && view.hasPointerCapture(pointerId)) {
+      view.releasePointerCapture(pointerId);
+    }
+
+    pointerId = null;
+    tracking = false;
+    dragging = false;
+
+    if (shouldGoBack) {
+      resetView();
+      setActiveView(state.lastMainView || "today");
+      return;
+    }
+
+    resetView();
+  }
+
+  view.addEventListener("pointerup", finish);
+  view.addEventListener("pointercancel", finish);
+}
+
 function handleViewActions(event) {
   const button = event.target.closest("button");
   const card = event.target.closest("[data-open-habit-id]");
@@ -203,6 +367,17 @@ function handleViewActions(event) {
 
   if (button?.dataset.backToView) {
     setActiveView(button.dataset.backToView);
+    return;
+  }
+
+  if (button?.dataset.monthStep) {
+    const step = Number(button.dataset.monthStep);
+    setDetailMonthOffset(state.detailMonthOffset + step);
+    return;
+  }
+
+  if (button?.dataset.monthOffset !== undefined && button?.dataset.monthOffset !== "") {
+    setDetailMonthOffset(Number(button.dataset.monthOffset));
     return;
   }
 
@@ -257,8 +432,6 @@ async function saveEntry(habitId, status, options = {}) {
     if (!options.skipRefresh) {
       await refreshState();
     }
-    const dateCopy = entryDate === today ? "for today" : `for ${formatFriendlyDate(parseLocalDate(entryDate))}`;
-    setComposerFeedback(`Saved ${status} ${dateCopy} on this device.`);
   } catch (error) {
     console.error(error);
     setComposerFeedback("Could not save that status.");
@@ -281,7 +454,6 @@ async function confirmAndDeleteHabit(habitId) {
     state.selectedHabitId = state.habits.find((item) => item.id !== habitId)?.id || null;
     setActiveView("today");
     await refreshState();
-    setComposerFeedback(`Deleted ${habit.name}.`);
   } catch (error) {
     console.error(error);
     setComposerFeedback("Could not delete the habit. Please try again.");
@@ -316,27 +488,40 @@ function render() {
 function renderChrome() {
   const headerMap = {
     today: {
-      kicker: formatFriendlyDate(parseLocalDate(today)),
-      title: greetingForHour(new Date().getHours()),
-      subtitle: ""
+      kicker: formatFriendlyDate(parseLocalDate(today)).toUpperCase(),
+      title: posterTitleFromCounts(),
+      subtitle: "",
+      variant: "poster",
+      accent: "coral"
     },
     insights: {
-      kicker: "Insights",
-      title: "Your rhythm",
-      subtitle: "A quick read on momentum, consistency, and what still needs attention."
+      kicker: "Insights · last 30 days",
+      title: 'Your <em>rhythm.</em>',
+      subtitle: "",
+      variant: "plain",
+      accent: "coral"
     },
     habitDetail: {
-      kicker: "Habit Detail",
-      title: selectedHabit()?.name || "Habit detail",
-      subtitle: ""
+      kicker: "",
+      title: "",
+      subtitle: "",
+      variant: "plain",
+      accent: selectedHabit() ? colorForHabit(selectedHabit()) : "coral"
     }
   };
 
   const chrome = headerMap[state.activeView] || headerMap.today;
+  const hideHeader = state.activeView === "habitDetail";
+  document.body.classList.toggle("is-habit-detail", hideHeader);
   elements.headerKicker.textContent = chrome.kicker;
-  elements.headerTitle.textContent = chrome.title;
+  elements.headerTitle.innerHTML = chrome.title;
   elements.headerSubtitle.textContent = chrome.subtitle;
   elements.headerSubtitle.hidden = !chrome.subtitle;
+  elements.headerAvatar.hidden = hideHeader;
+  elements.appHeader.hidden = hideHeader;
+
+  elements.appHeader.dataset.variant = chrome.variant;
+  applyAccent(elements.appHeader, chrome.accent);
 
   const visibleView = state.activeView === "habitDetail" ? "habitDetail" : state.activeView;
   const activeNavView = state.activeView === "habitDetail" ? state.lastMainView : state.activeView;
@@ -349,13 +534,55 @@ function renderChrome() {
   });
 }
 
+function posterTitleFromCounts() {
+  const total = state.habits.length;
+  if (!total) return 'A clean <em>slate.</em>';
+  const dueToday = state.habits.filter((h) => isHabitScheduledOnDate(h, parseLocalDate(today))).length;
+  const doneToday = state.habits.filter((h) => entryForHabitAndDate(h.id, today)?.status === "done").length;
+  const denom = Math.max(dueToday, 1);
+  const word = numberWord(doneToday);
+  const ofWord = numberWord(denom);
+  return `${capitalize(word)}<br/><em>of ${ofWord}.</em>`;
+}
+
+function posterTitleForHabit(habit) {
+  if (!habit) return "Habit";
+  const name = habit.name || "Habit";
+  // Two-line: first word bold, rest italic. Keep simple.
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) {
+    return `${escapeHtml(parts[0])}<br/><em>habit.</em>`;
+  }
+  const first = parts[0];
+  const rest = parts.slice(1).join(" ");
+  return `${escapeHtml(first)}<br/><em>${escapeHtml(rest)}.</em>`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[c]);
+}
+
+function numberWord(n) {
+  const words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+  return words[n] || String(n);
+}
+
+/* ── Today ───────────────────────────────────────────────── */
 function renderTodayView() {
   elements.todayView.innerHTML = "";
 
   if (!state.habits.length) {
-    elements.todayView.appendChild(buildEmptyCard("No habits yet", "Add your first habit to get a calm daily dashboard."));
+    elements.todayView.appendChild(buildEmptyCard("No habits yet", "Tap + to write your first one — describe it the way you'd say it to a friend."));
     return;
   }
+
+  // (today's progress bar removed)
+  const dueToday = state.habits.filter((h) => isHabitScheduledOnDate(h, parseLocalDate(today)));
+  const doneToday = dueToday.filter((h) => entryForHabitAndDate(h.id, today)?.status === "done").length;
+  const denom = Math.max(dueToday.length, 1);
+  const pct = Math.round((doneToday / denom) * 100);
 
   const list = document.createElement("section");
   list.className = "today-stack";
@@ -367,10 +594,329 @@ function renderTodayView() {
   initializeSwipeCards();
 }
 
+/* ── Insights ────────────────────────────────────────────── */
 function renderInsightsView() {
   elements.insightsView.innerHTML = "";
+  if (state.activeView !== "insights") return;
+
+  if (!state.habits.length) {
+    elements.insightsView.appendChild(
+      buildEmptyCard("Nothing to chart yet", "Add a habit and start logging — your patterns will show up here.")
+    );
+    return;
+  }
+
+  const stack = document.createElement("div");
+  stack.className = "insights-stack";
+
+  // ── KPI row
+  const last30 = buildLastNDates(30);
+  const last30Set = new Set(last30);
+  const totalScheduled = state.habits.reduce((acc, h) => {
+    return acc + last30.filter((d) => isHabitScheduledOnDate(h, parseLocalDate(d))).length;
+  }, 0);
+  const totalDone = state.entries.filter((e) => e.status === "done" && last30Set.has(e.date)).length;
+  const rate = totalScheduled ? Math.round((totalDone / totalScheduled) * 100) : 0;
+
+  // strongest current streak across all habits (completed cadence windows)
+  let bestStreak = 0;
+  let bestStreakHabit = "";
+  state.habits.forEach((habit) => {
+    const streak = currentCompletedWindowStreakForHabit(habit);
+    if (streak > bestStreak) {
+      bestStreak = streak;
+      bestStreakHabit = habit.name;
+    }
+  });
+
+  const kpiRow = document.createElement("div");
+  kpiRow.className = "kpi-row";
+  kpiRow.innerHTML = `
+    <div class="kpi kpi-hero">
+      <div class="kpi-label">Current streak</div>
+      <div class="kpi-num">${bestStreak} <em>${bestStreak === 1 ? "window" : "windows"}</em></div>
+      <div class="kpi-sub">${bestStreakHabit ? `on ${escapeHtml(bestStreakHabit)}` : "log a habit to begin"}</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Done</div>
+      <div class="kpi-num">${totalDone}<span class="of">/${totalScheduled || 0}</span></div>
+      <div class="kpi-sub">${rate}% rate</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Habits</div>
+      <div class="kpi-num">${state.habits.length}</div>
+      <div class="kpi-sub">tracked</div>
+    </div>
+  `;
+  stack.appendChild(kpiRow);
+
+  // ── weekday cadence chart
+  const weekdayStats = computeWeekdayStats();
+  const bestIdx = weekdayStats.reduce((best, w, i) => (w.pct > weekdayStats[best].pct ? i : best), 0);
+  const weekdayChart = document.createElement("div");
+  weekdayChart.className = "chart-card";
+  weekdayChart.innerHTML = `
+    <div class="chart-head">
+      <div class="chart-title">Best days of the week</div>
+      <div class="chart-meta">all habits</div>
+    </div>
+    <div class="weekday-bars">
+      ${weekdayStats.map((w, i) => `
+        <div class="weekday-col">
+          <div class="weekday-bar ${i === bestIdx ? "is-best" : ""}" style="height:${Math.max(8, (w.pct / 100) * 80)}px">
+            ${i === bestIdx ? `<span class="bar-pct">${w.pct}%</span>` : ""}
+          </div>
+          <div class="weekday-label ${i === bestIdx ? "is-best" : ""}">${w.short}</div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+  stack.appendChild(weekdayChart);
+
+  // ── per-habit lines
+  const byHabit = document.createElement("div");
+  byHabit.className = "chart-card";
+  const last12Weeks = buildLastNWeeks(12);
+  const habitLines = state.habits.map((habit) => {
+    const colorKey = colorForHabit(habit);
+    const vals = last12Weeks.map((week) =>
+      week.filter((d) => state.entries.some((e) => e.habitId === habit.id && e.date === d && e.status === "done")).length
+    );
+    const total = vals.reduce((a, b) => a + b, 0);
+    const cells = vals.map((v) => {
+      const opacity = 0.25 + (Math.min(v, 7) / 7) * 0.75;
+      return `<div class="byhabit-cell" style="opacity:${opacity.toFixed(2)}"></div>`;
+    }).join("");
+    return `
+      <div class="byhabit-row" style="--accent: var(--${colorKey}); --accent-deep: var(--${colorKey}-deep); --accent-tint: var(--${colorKey}-tint);">
+        <div class="byhabit-name">${escapeHtml(habit.name)}</div>
+        <div class="byhabit-cells" style="grid-template-columns: repeat(${vals.length}, 1fr)">${cells}</div>
+        <div class="byhabit-total">${total}</div>
+      </div>
+    `;
+  }).join("");
+  byHabit.innerHTML = `
+    <div class="chart-head">
+      <div class="chart-title">By habit</div>
+      <div class="chart-meta">last 12 weeks</div>
+    </div>
+    <div class="byhabit">${habitLines}</div>
+  `;
+  stack.appendChild(byHabit);
+
+  // ── AI-style insight (generated locally, no API)
+  const insight = buildInsightLine(weekdayStats, bestIdx);
+  if (insight) {
+    const ai = document.createElement("div");
+    ai.className = "ai-insight";
+    ai.innerHTML = `
+      <div class="ai-insight-badge">AI</div>
+      <p>${insight}</p>
+    `;
+    stack.appendChild(ai);
+  }
+
+  elements.insightsView.appendChild(stack);
 }
 
+function buildInsightLine(weekdayStats, bestIdx) {
+  const filled = weekdayStats.filter((w) => w.scheduled > 0);
+  if (filled.length < 2) return null;
+  const best = weekdayStats[bestIdx];
+  const worst = filled.reduce((acc, w) => (w.pct < acc.pct ? w : acc), filled[0]);
+  if (best.short === worst.short) return null;
+  return `${best.long}s are your best day — <strong>${best.pct}%</strong>. ${worst.long}s are your worst.`;
+}
+
+function computeWeekdayStats() {
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const long = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const stats = days.map((d, i) => ({ short: d[0], long: long[i], scheduled: 0, done: 0, pct: 0 }));
+  const last90 = buildLastNDates(90);
+  state.habits.forEach((habit) => {
+    last90.forEach((dateStr) => {
+      const d = parseLocalDate(dateStr);
+      if (!isHabitScheduledOnDate(habit, d)) return;
+      const wd = d.getDay();
+      stats[wd].scheduled += 1;
+      const e = state.entries.find((row) => row.habitId === habit.id && row.date === dateStr);
+      if (e?.status === "done") stats[wd].done += 1;
+    });
+  });
+  stats.forEach((s) => {
+    s.pct = s.scheduled ? Math.round((s.done / s.scheduled) * 100) : 0;
+  });
+  // reorder to Mon-first
+  return [stats[1], stats[2], stats[3], stats[4], stats[5], stats[6], stats[0]];
+}
+
+function currentCompletedWindowStreakForHabit(habit) {
+  const windows = buildStreakWindowsForHabit(habit);
+  let streak = 0;
+
+  for (let index = windows.length - 1; index >= 0; index -= 1) {
+    const window = windows[index];
+    if (isStreakWindowComplete(habit, window)) {
+      streak += 1;
+    } else {
+      break;
+    }
+  }
+
+  return streak;
+}
+
+function buildStreakWindowsForHabit(habit) {
+  if (habit.weeklyDays?.length || habit.periodDays === 7) {
+    return buildRollingWeekWindows(26);
+  }
+
+  if (habit.periodDays === 1) {
+    return buildRollingDayWindows(90);
+  }
+
+  if (habit.periodDays === 30) {
+    return buildRollingMonthWindows(12);
+  }
+
+  if (habit.periodDays === 365) {
+    return buildRollingYearWindows(5);
+  }
+
+  return buildFixedPeriodWindows(habit.periodDays || 7, 26);
+}
+
+function isStreakWindowComplete(habit, window) {
+  const entries = window.dates
+    .map((date) => entryForHabitAndDate(habit.id, date))
+    .filter(Boolean);
+
+  if (habit.weeklyDays?.length) {
+    const scheduledDates = window.dates.filter((date) => isHabitScheduledOnDate(habit, parseLocalDate(date)));
+    if (!scheduledDates.length) {
+      return false;
+    }
+    return scheduledDates.every((date) => entryForHabitAndDate(habit.id, date)?.status === "done");
+  }
+
+  if (habit.unit === "times") {
+    const doneCount = entries.filter((entry) => entry.status === "done").length;
+    return doneCount >= habit.targetCount;
+  }
+
+  if (window.kind === "day") {
+    return entries.some((entry) => entry.status === "done");
+  }
+
+  const scheduledDates = window.dates.filter((date) => isHabitScheduledOnDate(habit, parseLocalDate(date)));
+  if (!scheduledDates.length) {
+    return false;
+  }
+  return scheduledDates.every((date) => entryForHabitAndDate(habit.id, date)?.status === "done");
+}
+
+function setDetailMonthOffset(next) {
+  const clamped = Math.max(-11, Math.min(0, next));
+  if (clamped === state.detailMonthOffset) return;
+  state.detailMonthOffset = clamped;
+  renderHabitDetailView();
+  // Center active month chip in the strip
+  requestAnimationFrame(() => {
+    const strip = elements.habitDetailView.querySelector(".month-strip");
+    const active = strip?.querySelector(".month-chip.is-active");
+    if (strip && active) {
+      const target = active.offsetLeft - (strip.clientWidth / 2) + (active.clientWidth / 2);
+      strip.scrollTo({ left: Math.max(0, target), behavior: "smooth" });
+    }
+  });
+}
+
+function buildLastNDates(n) {
+  const dates = [];
+  const base = parseLocalDate(today);
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const d = new Date(base);
+    d.setDate(base.getDate() - i);
+    dates.push(formatLocalDate(d));
+  }
+  return dates;
+}
+
+function buildLastNWeeks(n) {
+  const all = buildLastNDates(n * 7);
+  const weeks = [];
+  for (let i = 0; i < n; i += 1) {
+    weeks.push(all.slice(i * 7, (i + 1) * 7));
+  }
+  return weeks;
+}
+
+function buildRollingDayWindows(n) {
+  return buildLastNDates(n).map((date) => ({
+    kind: "day",
+    dates: [date]
+  }));
+}
+
+function buildRollingWeekWindows(n) {
+  return buildLastNWeeks(n).map((dates) => ({
+    kind: "week",
+    dates
+  }));
+}
+
+function buildRollingMonthWindows(n) {
+  const months = [];
+  const base = parseLocalDate(today);
+
+  for (let index = n - 1; index >= 0; index -= 1) {
+    const monthDate = new Date(base.getFullYear(), base.getMonth() - index, 1);
+    months.push({
+      kind: "month",
+      dates: buildMonthDates(monthDate.getFullYear(), monthDate.getMonth())
+    });
+  }
+
+  return months;
+}
+
+function buildRollingYearWindows(n) {
+  const years = [];
+  const currentYear = parseLocalDate(today).getFullYear();
+
+  for (let year = currentYear - (n - 1); year <= currentYear; year += 1) {
+    years.push({
+      kind: "year",
+      dates: buildYearDates(year)
+    });
+  }
+
+  return years;
+}
+
+function buildFixedPeriodWindows(periodDays, count) {
+  const end = parseLocalDate(today);
+  const windows = [];
+
+  for (let index = count - 1; index >= 0; index -= 1) {
+    const windowEnd = new Date(end);
+    windowEnd.setDate(end.getDate() - index * periodDays);
+    const dates = [];
+    for (let offset = periodDays - 1; offset >= 0; offset -= 1) {
+      const d = new Date(windowEnd);
+      d.setDate(windowEnd.getDate() - offset);
+      dates.push(formatLocalDate(d));
+    }
+    windows.push({
+      kind: "period",
+      dates
+    });
+  }
+
+  return windows;
+}
+
+/* ── Habit Detail ────────────────────────────────────────── */
 function renderHabitDetailView() {
   if (state.activeView !== "habitDetail") {
     elements.habitDetailView.innerHTML = "";
@@ -382,59 +928,112 @@ function renderHabitDetailView() {
   const habit = selectedHabit();
   if (!habit) {
     elements.habitDetailView.appendChild(
-      buildEmptyCard("No habit selected", "Open a habit from the library or Today view to see its detail.")
+      buildEmptyCard("No habit selected", "Open a habit from Today to see its detail.")
     );
     return;
   }
 
-  const entry = entryForHabitAndDate(habit.id, today);
+  const colorKey = colorForHabit(habit);
+  const illoKey = illoForHabit(habit);
   const habitEntries = entriesForHabit(habit.id);
-  const monthDates = buildCurrentMonthDates();
+
+  // Clamp offset so it doesn't go below -11 or above 0
+  if (state.detailMonthOffset > 0) state.detailMonthOffset = 0;
+  if (state.detailMonthOffset < -11) state.detailMonthOffset = -11;
+
+  const months = buildLast12MonthsList();
+  const activeInfo = getMonthInfo(state.detailMonthOffset);
+  const monthDates = buildMonthDates(activeInfo.year, activeInfo.month);
   const monthEntries = habitEntries.filter((row) => monthDates.includes(row.date));
-  const calendarDays = buildCurrentMonthCalendarDays(habit);
+  const calendarDays = buildMonthCalendarDays(habit, activeInfo.year, activeInfo.month);
+  const scheduledThisMonth = calendarDays.filter((d) => d.isScheduled).length;
+  const doneThisMonth = monthEntries.filter((r) => r.status === "done").length;
+  const monthPct = scheduledThisMonth ? Math.round((doneThisMonth / scheduledThisMonth) * 100) : 0;
+  const streak = currentCompletedWindowStreakForHabit(habit);
+  const currentWindowStats = calculateHabitProgress(habit);
 
   const shell = document.createElement("section");
   shell.className = "detail-shell";
+  applyAccent(shell, colorKey);
+  shell.style.setProperty("color-scheme", "light");
   shell.innerHTML = `
-    <div class="detail-topbar">
-      <button class="back-button" data-back-to-view="${state.lastMainView}" type="button" aria-label="Go back">← Back</button>
-      <span class="detail-topbar-label">${getCurrentMonthLabel()}</span>
+    <div class="detail-actions-top">
+      <button class="back-button" data-back-to-view="${state.lastMainView}" type="button">‹ Back</button>
     </div>
-    <article class="detail-card">
-      <p class="detail-rationale">${cadenceExplanation(habit)}</p>
-      <div class="detail-stats">
-        <article class="detail-stat">
-          <span>Scheduled this month</span>
-          <strong>${calendarDays.filter((day) => day.isScheduled).length}</strong>
-        </article>
-        <article class="detail-stat">
-          <span>Done this month</span>
-          <strong>${monthEntries.filter((row) => row.status === "done").length}</strong>
-        </article>
-        <article class="detail-stat">
-          <span>Skipped this month</span>
-          <strong>${monthEntries.filter((row) => row.status === "skipped").length}</strong>
-        </article>
+
+    <div class="detail-hero">
+      <div class="detail-hero-sun" aria-hidden="true"></div>
+      <svg class="detail-hero-hills" viewBox="0 0 390 180" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M0 130 Q 80 80 180 110 T 390 90 L 390 180 L 0 180 Z" fill="var(--sage)"/>
+        <path d="M0 150 Q 60 120 160 140 T 320 130 L 390 150 L 390 180 L 0 180 Z" fill="var(--sage-deep)"/>
+        <path d="M0 168 L 390 168 L 390 180 L 0 180 Z" fill="var(--ink)" opacity="0.5"/>
+      </svg>
+      <div class="detail-hero-illo" data-illo-key="${illoKey}"></div>
+      <div class="detail-hero-copy">
+        <div class="detail-hero-cat">${escapeHtml(habit.category || "Habit")}</div>
+        <div class="detail-hero-title">${posterTitleForHabit(habit)}</div>
       </div>
-      <div class="today-card-actions detail-actions">
-        <button class="action-button done-button" data-action="done" data-habit-id="${habit.id}" type="button">Done</button>
-        <button class="action-button skip-button" data-action="skip" data-habit-id="${habit.id}" type="button">Skip</button>
-        <button class="action-button edit-button" data-edit-habit-id="${habit.id}" type="button">Edit habit</button>
-        <button class="action-button delete-button" data-delete-habit-id="${habit.id}" type="button">Delete habit</button>
+    </div>
+
+    <p class="detail-rationale">${escapeHtml(cadenceExplanation(habit))}</p>
+
+    <div class="detail-stat-row">
+      <div>
+        <div class="detail-stat-big-num">${monthPct}<span class="pct">%</span></div>
+        <div class="detail-stat-big-label">${escapeHtml(activeInfo.monthOnly)} completion</div>
       </div>
-      <div class="calendar-wrap">
-        <div class="calendar-legend">
-          <span><i class="legend-box legend-none"></i> Not logged</span>
-          <span><i class="legend-box legend-done"></i> Done</span>
-          <span><i class="legend-box legend-skipped"></i> Skipped</span>
-          <span><i class="legend-box legend-scheduled"></i> Scheduled</span>
+      <div class="detail-stat-mini-row">
+        <div class="detail-stat-mini">
+          <div class="detail-stat-mini-label">Streak</div>
+          <div class="detail-stat-mini-num">${streak}</div>
         </div>
-        <div class="calendar-grid"></div>
+        <div class="detail-stat-mini">
+          <div class="detail-stat-mini-label">Done</div>
+          <div class="detail-stat-mini-num">${currentWindowStats.completed}<span class="of">/${currentWindowStats.target}</span></div>
+        </div>
       </div>
-    </article>
+    </div>
+
+    <div class="month-strip" role="tablist" aria-label="Browse months">
+      ${months.map((m, i) => {
+        const off = i - 11;
+        const isActive = off === state.detailMonthOffset;
+        return `<button class="month-chip ${isActive ? "is-active" : ""}" data-month-offset="${off}" type="button" role="tab" aria-selected="${isActive}">${escapeHtml(m.shortLabel)}</button>`;
+      }).join("")}
+    </div>
+
+    <div class="calendar-wrap" data-swipe-month="true">
+      <div class="calendar-head">
+        <button class="month-nav-button" data-month-step="-1" type="button" aria-label="Previous month" ${state.detailMonthOffset <= -11 ? "disabled" : ""}>‹</button>
+        <div class="calendar-title">${escapeHtml(activeInfo.longLabel)}</div>
+        <button class="month-nav-button" data-month-step="1" type="button" aria-label="Next month" ${state.detailMonthOffset >= 0 ? "disabled" : ""}>›</button>
+      </div>
+      <div class="calendar-grid"></div>
+      <div class="calendar-legend">
+        <span><i class="legend-box legend-done"></i>Done</span>
+        <span><i class="legend-box legend-skipped"></i>Skipped</span>
+        <span><i class="legend-box legend-scheduled"></i>Scheduled</span>
+      </div>
+    </div>
+
+    <div class="detail-actions">
+      ${activeInfo.isCurrent ? `<button class="action-button done-button" data-action="done" data-habit-id="${habit.id}" type="button">Mark today done</button>
+      <button class="action-button skip-button" data-action="skip" data-habit-id="${habit.id}" type="button">Skip</button>` : ""}
+      <button class="action-button" data-edit-habit-id="${habit.id}" type="button">Edit</button>
+      <button class="action-button delete-button" data-delete-habit-id="${habit.id}" type="button">Delete</button>
+    </div>
   `;
 
-  const calendarGrid = shell.querySelector(".calendar-grid");
+  // padding for first-of-month
+  const grid = shell.querySelector(".calendar-grid");
+  if (calendarDays.length) {
+    const firstWeekday = parseLocalDate(calendarDays[0].date).getDay();
+    for (let i = 0; i < firstWeekday; i += 1) {
+      const pad = document.createElement("div");
+      pad.style.visibility = "hidden";
+      grid.appendChild(pad);
+    }
+  }
   calendarDays.forEach((day) => {
     const cell = document.createElement(day.isLoggable ? "button" : "div");
     cell.className = `day-cell ${day.statusClass} ${day.isLoggable ? "is-loggable" : "is-future"} ${
@@ -447,33 +1046,74 @@ function renderHabitDetailView() {
       cell.dataset.calendarHabitId = habit.id;
       cell.setAttribute("aria-label", `Log ${habit.name} on ${formatFriendlyDate(parseLocalDate(day.date))}`);
     }
-    cell.innerHTML = `
-      <span>${day.weekday}</span>
-      <span class="day-number">${day.dayOfMonth}</span>
-      <span class="day-state">${day.shortLabel}</span>
-    `;
-    calendarGrid.appendChild(cell);
+    cell.innerHTML = `<span class="day-number">${day.dayOfMonth.replace(/^0/, "")}</span>`;
+    grid.appendChild(cell);
   });
 
   elements.habitDetailView.appendChild(shell);
+
+  // Inject hero illustration via createElement so the path-rewrite shim runs.
+  const heroIllo = shell.querySelector(".detail-hero-illo");
+  if (heroIllo) {
+    const img = document.createElement("img");
+    img.alt = "";
+    img.src = `/illustrations/${heroIllo.dataset.illoKey}.svg`;
+    heroIllo.appendChild(img);
+  }
+
+  // Center active month chip in strip
+  const strip = shell.querySelector(".month-strip");
+  const active = strip?.querySelector(".month-chip.is-active");
+  if (strip && active) {
+    requestAnimationFrame(() => {
+      const target = active.offsetLeft - (strip.clientWidth / 2) + (active.clientWidth / 2);
+      strip.scrollLeft = Math.max(0, target);
+    });
+  }
+
+  // Swipe the calendar to change month
+  const swipeArea = shell.querySelector('[data-swipe-month="true"]');
+  if (swipeArea) attachMonthSwipe(swipeArea);
+}
+
+function attachMonthSwipe(node) {
+  let startX = 0;
+  let startY = 0;
+  let tracking = false;
+  node.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1) return;
+    tracking = true;
+    startX = e.touches[0].clientX;
+    startY = e.touches[0].clientY;
+  }, { passive: true });
+  node.addEventListener("touchend", (e) => {
+    if (!tracking) return;
+    tracking = false;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - startX;
+    const dy = t.clientY - startY;
+    if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+    if (dx < 0) setDetailMonthOffset(state.detailMonthOffset + 1);
+    else setDetailMonthOffset(state.detailMonthOffset - 1);
+  }, { passive: true });
 }
 
 function renderComposer() {
   elements.composerModal.hidden = !state.isComposerOpen;
   document.body.classList.toggle("is-sheet-open", state.isComposerOpen || state.isLogSheetOpen);
   const isEditing = state.composerMode === "edit";
-  elements.composerTitle.textContent = isEditing ? "Edit Habit" : "Create Habit";
+  elements.composerTitle.innerHTML = isEditing ? 'Edit <em>habit.</em>' : 'A new <em>habit.</em>';
   elements.habitTitleField.hidden = !isEditing;
   elements.habitInput.disabled = !state.isOnline;
   elements.habitTitleInput.disabled = !isEditing;
   elements.habitSubmitButton.disabled = !state.isOnline;
-  elements.habitSubmitButton.textContent = isEditing ? "Save habit changes" : "Infer and create habit";
+  elements.habitSubmitButton.textContent = isEditing ? "Save changes" : "Save habit ✦";
 
   if (state.isComposerOpen && !state.isOnline) {
     setComposerFeedback(
       isEditing
-        ? "Offline mode: you can still track habits, but editing target and cadence needs a connection."
-        : "Offline mode: you can check off saved habits, but AI habit creation needs a connection."
+        ? "Offline mode: editing target and cadence needs a connection."
+        : "Offline mode: AI habit creation needs a connection."
     );
   } else if (state.isComposerOpen && !elements.habitInput.value.trim()) {
     setComposerFeedback("");
@@ -483,24 +1123,38 @@ function renderComposer() {
 function buildTodayCard(habit, entry) {
   const fragment = elements.todayCardTemplate.content.cloneNode(true);
   const card = fragment.querySelector(".today-card");
-  const progress = calculateHabitProgress(habit);
+  const colorKey = colorForHabit(habit);
+  const illoKey = illoForHabit(habit);
   const isDueToday = isHabitScheduledOnDate(habit, parseLocalDate(today));
+  const progress = calculateHabitProgress(habit);
 
+  applyAccent(card, colorKey);
   card.dataset.state = entry ? entry.status : isDueToday ? "scheduled" : "idle";
   card.dataset.openHabitId = habit.id;
-  card.querySelector(".today-card-title").textContent = habit.name;
-  card.querySelector(".today-card-meta").textContent = formatHabitMeta(habit);
-  card.querySelector(".progress-window-label").textContent = progress.summaryLabel;
-  card.querySelector(".progress-window-value").textContent = `${progress.completed}/${progress.target}`;
-  card.querySelector(".progress-track-window-label").textContent = progress.trackLabel;
-  card.querySelector(".progress-track-window-meta").textContent = `${progress.percent}% complete`;
-  card.querySelector(".progress-window-fill").style.width = `${progress.percent}%`;
 
-  fragment.querySelectorAll("[data-action]").forEach((button) => {
-    button.dataset.habitId = habit.id;
-  });
+  fragment.querySelector(".tile-illo").src = `/illustrations/${illoKey}.svg`;
+  fragment.querySelector(".today-card-cat").textContent = habit.category || "Habit";
+  fragment.querySelector(".today-card-title").textContent = habit.name;
+  fragment.querySelector(".today-card-meta").textContent = compactCadence(habit);
+
+  const pip = fragment.querySelector(".today-card-pip");
+  if (entry?.status === "done") {
+    pip.textContent = "✓";
+  } else if (entry?.status === "skipped") {
+    pip.textContent = "✕";
+  } else {
+    pip.innerHTML = `<span class="frac">${progress.completed}/${progress.target}</span>`;
+  }
 
   return fragment;
+}
+
+function compactCadence(habit) {
+  const days = habit.weeklyDays?.length
+    ? habit.weeklyDays.map(shortDayName).join(" · ")
+    : `every ${habit.periodDays} day${habit.periodDays === 1 ? "" : "s"}`;
+  const target = `${habit.targetCount} ${habit.unit}`;
+  return `${target} · ${days}`;
 }
 
 function initializeSwipeCards() {
@@ -672,23 +1326,12 @@ async function animateCommittedCard(card, action) {
   if (content && typeof content.animate === "function") {
     content.animate(
       [
-        {
-          transform: `translate3d(${getComputedStyle(card).getPropertyValue("--swipe-x") || "0px"}, 0, 0) scale(1)`,
-          opacity: 1
-        },
-        {
-          transform: `translate3d(${action === "done" ? "160px" : "-160px"}, 0, 0) scale(0.96)`,
-          opacity: 0
-        }
+        { transform: `translate3d(${getComputedStyle(card).getPropertyValue("--swipe-x") || "0px"}, 0, 0) scale(1)`, opacity: 1 },
+        { transform: `translate3d(${action === "done" ? "160px" : "-160px"}, 0, 0) scale(0.96)`, opacity: 0 }
       ],
-      {
-        duration: 220,
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-        fill: "forwards"
-      }
+      { duration: 220, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "forwards" }
     );
   }
-
   await new Promise((resolve) => window.setTimeout(resolve, 230));
 }
 
@@ -706,10 +1349,7 @@ async function animatePeekHint(card, direction) {
         { transform: `translate3d(${peekX}px, 0, 0)` },
         { transform: "translate3d(0, 0, 0)" }
       ],
-      {
-        duration: 320,
-        easing: "cubic-bezier(0.2, 0.9, 0.25, 1.15)"
-      }
+      { duration: 320, easing: "cubic-bezier(0.2, 0.9, 0.25, 1.15)" }
     );
   }
 
@@ -739,39 +1379,36 @@ function calculateHabitProgress(habit) {
 }
 
 function progressWindowForHabit(habit) {
-  if (habit.weeklyDays.length) {
-    return {
-      kind: "weekly",
-      dates: buildCurrentWeekDates(),
-      summaryLabel: "This week",
-      trackLabel: "Weekly progress"
-    };
+  if (habit.weeklyDays?.length) {
+    return { kind: "weekly", dates: buildCurrentWeekDates(), summaryLabel: "This week", trackLabel: "Weekly" };
   }
 
   if (habit.periodDays === 1) {
+    return { kind: "daily", dates: [today], summaryLabel: "Today", trackLabel: "Daily" };
+  }
+
+  if (habit.periodDays === 7) {
+    return { kind: "weekly", dates: buildCurrentWeekDates(), summaryLabel: "This week", trackLabel: "Weekly" };
+  }
+
+  if (habit.periodDays === 30) {
+    return { kind: "monthly", dates: buildCurrentMonthDates(), summaryLabel: "This month", trackLabel: "Monthly" };
+  }
+
+  if (habit.periodDays === 365) {
+    return { kind: "yearly", dates: buildCurrentYearDates(), summaryLabel: "This year", trackLabel: "Yearly" };
+  }
+
+  if (habit.periodDays > 1) {
     return {
-      kind: "daily",
-      dates: [today],
-      summaryLabel: "Today",
-      trackLabel: "Daily progress"
+      kind: "period",
+      dates: buildCurrentPeriodDates(habit.periodDays),
+      summaryLabel: "Current window",
+      trackLabel: "Tracking window"
     };
   }
 
-  if (habit.periodDays <= 7) {
-    return {
-      kind: "weekly",
-      dates: buildCurrentWeekDates(),
-      summaryLabel: "This week",
-      trackLabel: "Weekly progress"
-    };
-  }
-
-  return {
-    kind: "monthly",
-    dates: buildCurrentMonthDates(),
-    summaryLabel: "This month",
-    trackLabel: "Monthly progress"
-  };
+  return { kind: "daily", dates: [today], summaryLabel: "Today", trackLabel: "Daily" };
 }
 
 function targetOccurrencesForWindow(habit, window) {
@@ -779,7 +1416,7 @@ function targetOccurrencesForWindow(habit, window) {
     return habit.targetCount;
   }
 
-  if (habit.weeklyDays.length) {
+  if (habit.weeklyDays?.length) {
     return window.dates.filter((date) => isHabitScheduledOnDate(habit, parseLocalDate(date))).length;
   }
 
@@ -790,30 +1427,13 @@ function targetOccurrencesForWindow(habit, window) {
   return 1;
 }
 
-function buildHabitRow(habit) {
-  const fragment = elements.habitRowTemplate.content.cloneNode(true);
-  const button = fragment.querySelector(".habit-row-button");
-  const todayEntry = entryForHabitAndDate(habit.id, today);
-
-  button.dataset.openHabitId = habit.id;
-  fragment.querySelector(".habit-row-title").textContent = habit.name;
-  fragment.querySelector(".habit-row-meta").textContent = formatHabitMeta(habit);
-  fragment.querySelector(".habit-row-status").textContent = todayEntry
-    ? capitalize(todayEntry.status)
-    : isHabitScheduledOnDate(habit, parseLocalDate(today))
-      ? "Scheduled"
-      : "Not due";
-
-  return fragment;
-}
-
 function buildEmptyCard(title, copy) {
   const card = document.createElement("section");
   card.className = "empty-card";
   card.innerHTML = `
     <div class="panel-title">Nothing here yet</div>
-    <h2>${title}</h2>
-    <p>${copy}</p>
+    <h2>${escapeHtml(title)}</h2>
+    <p>${escapeHtml(copy)}</p>
   `;
   return card;
 }
@@ -872,70 +1492,21 @@ function openEditComposer(habitId) {
 }
 
 function initializeLogSheetDismiss() {
-  let pointerId = null;
-  let startY = 0;
-  let dragY = 0;
-  let dragging = false;
-
-  elements.logSheet.addEventListener("pointerdown", (event) => {
-    const onInteractive = event.target.closest("button");
-    if (onInteractive) {
-      return;
-    }
-
-    pointerId = event.pointerId;
-    startY = event.clientY;
-    dragY = 0;
-    dragging = false;
-  });
-
-  elements.logSheet.addEventListener("pointermove", (event) => {
-    if (event.pointerId !== pointerId) {
-      return;
-    }
-
-    const deltaY = event.clientY - startY;
-    if (deltaY <= 0) {
-      return;
-    }
-
-    dragging = true;
-    dragY = deltaY * 0.95;
-    elements.logSheet.style.setProperty("--sheet-drag-y", `${dragY}px`);
-  });
-
-  elements.logSheet.addEventListener("pointerup", (event) => {
-    if (event.pointerId !== pointerId) {
-      return;
-    }
-
-    pointerId = null;
-    if (dragging && dragY > 96) {
-      closeLogSheet();
-    } else {
-      elements.logSheet.style.removeProperty("--sheet-drag-y");
-    }
-
-    dragging = false;
-    dragY = 0;
-  });
-
-  elements.logSheet.addEventListener("pointercancel", () => {
-    pointerId = null;
-    dragging = false;
-    dragY = 0;
-    elements.logSheet.style.removeProperty("--sheet-drag-y");
-  });
+  initializeSheetDismiss(elements.logSheet, closeLogSheet);
 }
 
 function initializeComposerSheetDismiss() {
+  initializeSheetDismiss(elements.composerSheet, closeComposer, "textarea, input, button");
+}
+
+function initializeSheetDismiss(sheet, onDismiss, interactiveSelector = "button") {
   let pointerId = null;
   let startY = 0;
   let dragY = 0;
   let dragging = false;
 
-  elements.composerSheet.addEventListener("pointerdown", (event) => {
-    const onInteractive = event.target.closest("textarea, button");
+  sheet.addEventListener("pointerdown", (event) => {
+    const onInteractive = event.target.closest(interactiveSelector);
     if (onInteractive) {
       return;
     }
@@ -946,7 +1517,7 @@ function initializeComposerSheetDismiss() {
     dragging = false;
   });
 
-  elements.composerSheet.addEventListener("pointermove", (event) => {
+  sheet.addEventListener("pointermove", (event) => {
     if (event.pointerId !== pointerId) {
       return;
     }
@@ -958,30 +1529,30 @@ function initializeComposerSheetDismiss() {
 
     dragging = true;
     dragY = deltaY * 0.95;
-    elements.composerSheet.style.setProperty("--sheet-drag-y", `${dragY}px`);
+    sheet.style.setProperty("--sheet-drag-y", `${dragY}px`);
   });
 
-  elements.composerSheet.addEventListener("pointerup", (event) => {
+  sheet.addEventListener("pointerup", (event) => {
     if (event.pointerId !== pointerId) {
       return;
     }
 
     pointerId = null;
     if (dragging && dragY > 96) {
-      closeComposer();
+      onDismiss();
     } else {
-      elements.composerSheet.style.removeProperty("--sheet-drag-y");
+      sheet.style.removeProperty("--sheet-drag-y");
     }
 
     dragging = false;
     dragY = 0;
   });
 
-  elements.composerSheet.addEventListener("pointercancel", () => {
+  sheet.addEventListener("pointercancel", () => {
     pointerId = null;
     dragging = false;
     dragY = 0;
-    elements.composerSheet.style.removeProperty("--sheet-drag-y");
+    sheet.style.removeProperty("--sheet-drag-y");
   });
 }
 
@@ -995,6 +1566,8 @@ function setActiveView(nextView) {
   const outgoing = getViewElement(previousView);
   if (nextView !== "habitDetail") {
     state.lastMainView = nextView;
+  } else if (previousView !== "habitDetail") {
+    state.detailMonthOffset = 0;
   }
 
   if (outgoing && typeof outgoing.animate === "function") {
@@ -1004,10 +1577,7 @@ function setActiveView(nextView) {
         { opacity: 1, transform: "translate3d(0, 0, 0)" },
         { opacity: 0, transform: "translate3d(-22px, 0, 0)" }
       ],
-      {
-        duration: 220,
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)"
-      }
+      { duration: 220, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }
     );
   }
 
@@ -1061,33 +1631,13 @@ function selectedHabit() {
   return state.habits.find((habit) => habit.id === state.selectedHabitId) || null;
 }
 
-function habitsScheduledForDate(date) {
-  return state.habits.filter((habit) => isHabitScheduledOnDate(habit, date));
-}
-
 function entryForHabitAndDate(habitId, date) {
   return state.entries.find((entry) => entry.habitId === habitId && entry.date === date) || null;
 }
 
-function formatHabitMeta(habit) {
-  const daysText = habit.weeklyDays.length
-    ? habit.weeklyDays.map(shortDayName).join(", ")
-    : `every ${habit.periodDays} day${habit.periodDays === 1 ? "" : "s"}`;
-
-  return `${habit.category} • target ${habit.targetCount} ${habit.unit} • ${daysText}`;
-}
-
-function shortCadence(habit) {
-  if (habit.weeklyDays.length) {
-    return habit.weeklyDays.map(shortDayName).join(", ");
-  }
-
-  return `Every ${habit.periodDays} day${habit.periodDays === 1 ? "" : "s"}`;
-}
-
 function cadenceExplanation(habit) {
-  if (habit.weeklyDays.length) {
-    return `Tracking on ${habit.weeklyDays.map(shortDayName).join(", ")} with a target of ${habit.targetCount} ${habit.unit}.`;
+  if (habit.weeklyDays?.length) {
+    return `Tracking on ${habit.weeklyDays.map(shortDayName).join(", ")} · target ${habit.targetCount} ${habit.unit}.`;
   }
 
   return `Tracking ${habit.targetCount} ${habit.unit} every ${habit.periodDays} day${habit.periodDays === 1 ? "" : "s"}.`;
@@ -1106,7 +1656,7 @@ function renderLogSheet() {
   const friendlyDate = formatFriendlyDate(parseLocalDate(state.selectedLogDate));
 
   elements.logSheetTitle.textContent = habit ? habit.name : "Log day";
-  elements.logSheetSubtitle.textContent = `${friendlyDate} • ${entry ? capitalize(entry.status) : "Not logged"}`;
+  elements.logSheetSubtitle.textContent = `${friendlyDate} · ${entry ? capitalize(entry.status) : "Not logged"}`;
   elements.logSheetClear.hidden = !entry;
 }
 
@@ -1115,9 +1665,14 @@ function entriesForHabit(habitId) {
 }
 
 function buildCurrentMonthCalendarDays(habit) {
+  const base = parseLocalDate(today);
+  return buildMonthCalendarDays(habit, base.getFullYear(), base.getMonth());
+}
+
+function buildMonthCalendarDays(habit, year, month) {
   const entryMap = new Map(entriesForHabit(habit.id).map((entry) => [entry.date, entry.status]));
 
-  return buildCurrentMonthDates().map((date) => {
+  return buildMonthDates(year, month).map((date) => {
     const dayDate = parseLocalDate(date);
     const weekday = dayDate.getDay();
     const entryStatus = entryMap.get(date);
@@ -1155,17 +1710,25 @@ function buildCurrentMonthCalendarDays(habit) {
 }
 
 function buildCurrentMonthDates() {
-  const days = [];
   const base = parseLocalDate(today);
-  const year = base.getFullYear();
-  const month = base.getMonth();
-  const lastDay = new Date(year, month + 1, 0).getDate();
+  return buildMonthDates(base.getFullYear(), base.getMonth());
+}
 
+function buildCurrentYearDates() {
+  return buildYearDates(parseLocalDate(today).getFullYear());
+}
+
+function buildCurrentPeriodDates(periodDays) {
+  return buildLastNDates(Math.max(periodDays, 1));
+}
+
+function buildMonthDates(year, month) {
+  const days = [];
+  const lastDay = new Date(year, month + 1, 0).getDate();
   for (let day = 1; day <= lastDay; day += 1) {
     const next = new Date(year, month, day);
     days.push(formatLocalDate(next));
   }
-
   return days;
 }
 
@@ -1186,10 +1749,26 @@ function buildCurrentWeekDates() {
 }
 
 function getCurrentMonthLabel() {
-  return parseLocalDate(today).toLocaleDateString(undefined, {
-    month: "long",
-    year: "numeric"
-  });
+  return parseLocalDate(today).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
+function getMonthInfo(offset) {
+  const base = parseLocalDate(today);
+  const date = new Date(base.getFullYear(), base.getMonth() + offset, 1);
+  return {
+    year: date.getFullYear(),
+    month: date.getMonth(),
+    longLabel: date.toLocaleDateString(undefined, { month: "long", year: "numeric" }),
+    shortLabel: date.toLocaleDateString(undefined, { month: "short", year: "2-digit" }),
+    monthOnly: date.toLocaleDateString(undefined, { month: "long" }),
+    isCurrent: offset === 0
+  };
+}
+
+function buildLast12MonthsList() {
+  const list = [];
+  for (let i = 11; i >= 0; i -= 1) list.push(getMonthInfo(-i));
+  return list;
 }
 
 function shortDayName(index) {
@@ -1213,21 +1792,7 @@ function formatLocalDate(date) {
 }
 
 function formatFriendlyDate(date) {
-  return date.toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric"
-  });
-}
-
-function greetingForHour(hour) {
-  if (hour < 12) {
-    return "Good morning";
-  }
-  if (hour < 18) {
-    return "Good afternoon";
-  }
-  return "Good evening";
+  return date.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 }
 
 function capitalize(value) {
@@ -1235,7 +1800,7 @@ function capitalize(value) {
 }
 
 function isHabitScheduledOnDate(habit, date) {
-  if (habit.weeklyDays.length) {
+  if (habit.weeklyDays?.length) {
     return habit.weeklyDays.includes(date.getDay());
   }
 
@@ -1255,10 +1820,7 @@ async function saveSelectedLogDate(status) {
   }
 
   const selectedDate = state.selectedLogDate;
-  await saveEntry(state.selectedLogHabitId, status, {
-    date: selectedDate,
-    skipRefresh: false
-  });
+  await saveEntry(state.selectedLogHabitId, status, { date: selectedDate, skipRefresh: false });
   closeLogSheet();
 }
 
@@ -1272,10 +1834,8 @@ async function clearSelectedLogDate() {
   try {
     await deleteEntry(state.selectedLogHabitId, selectedDate);
     await refreshState();
-    setComposerFeedback(`Cleared the log for ${formatFriendlyDate(parseLocalDate(selectedDate))}.`);
   } catch (error) {
     console.error(error);
-    setComposerFeedback("Could not clear that log.");
   }
 
   closeLogSheet();
@@ -1303,7 +1863,7 @@ async function hydrateLocalStore() {
 
     if (result.imported) {
       setComposerFeedback(
-        `Imported ${result.counts.habits} habits and ${result.counts.entries} entries from the server to this device.`
+        `Imported ${result.counts.habits} habits and ${result.counts.entries} entries.`
       );
       await refreshState();
     }
