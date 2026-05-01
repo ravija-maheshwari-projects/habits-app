@@ -843,11 +843,23 @@ function buildLastNDates(n) {
 }
 
 function buildLastNWeeks(n) {
-  const all = buildLastNDates(n * 7);
   const weeks = [];
-  for (let i = 0; i < n; i += 1) {
-    weeks.push(all.slice(i * 7, (i + 1) * 7));
+  const currentWeekStart = startOfWeekMonday(parseLocalDate(today));
+
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const weekStart = new Date(currentWeekStart);
+    weekStart.setDate(currentWeekStart.getDate() - i * 7);
+    const weekDates = [];
+
+    for (let offset = 0; offset < 7; offset += 1) {
+      const next = new Date(weekStart);
+      next.setDate(weekStart.getDate() + offset);
+      weekDates.push(formatLocalDate(next));
+    }
+
+    weeks.push(weekDates);
   }
+
   return weeks;
 }
 
@@ -1749,10 +1761,7 @@ function buildMonthDates(year, month) {
 
 function buildCurrentWeekDates() {
   const dates = [];
-  const base = parseLocalDate(today);
-  const dayOfWeek = base.getDay();
-  const start = new Date(base);
-  start.setDate(base.getDate() - dayOfWeek);
+  const start = startOfWeekMonday(parseLocalDate(today));
 
   for (let index = 0; index < 7; index += 1) {
     const next = new Date(start);
@@ -1761,6 +1770,14 @@ function buildCurrentWeekDates() {
   }
 
   return dates;
+}
+
+function startOfWeekMonday(date) {
+  const start = new Date(date);
+  const dayOfWeek = start.getDay();
+  const offset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  start.setDate(start.getDate() - offset);
+  return start;
 }
 
 function getCurrentMonthLabel() {
