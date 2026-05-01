@@ -1,10 +1,13 @@
 import {
+  clearPendingSyncDeletes,
   createHabit,
   deleteEntry,
   deleteHabit,
   getState as getLocalState,
-  hydrateFromServer,
   initializeStorage,
+  getPendingSyncDeletes,
+  mergeRemoteState,
+  queuePendingSyncDeletes,
   updateHabit,
   upsertEntry
 } from "./storage.js";
@@ -30,6 +33,9 @@ const SWIPE_TRIGGER = 76;
 const SWIPE_MAX = 132;
 const EDGE_BACK_START = 28;
 const EDGE_BACK_TRIGGER = 84;
+const DEVICE_ID_KEY = "habitai-device-id";
+
+let syncInFlight = false;
 
 /* ── Poster palette + illustration mapping ──────────────────── */
 const COLOR_KEYS = ["coral", "ochre", "sage", "plum", "sky"];
@@ -138,7 +144,7 @@ async function boot() {
     await refreshState();
 
     if (state.isOnline) {
-      await hydrateLocalStore();
+      await syncCloudBackup();
     }
 
     await registerServiceWorker();
@@ -220,6 +226,9 @@ function bindEvents() {
       closeComposer();
       setActiveView("habitDetail");
       await refreshState();
+      if (state.isOnline) {
+        await syncCloudBackup();
+      }
     } catch (error) {
       console.error(error);
       setComposerFeedback(
@@ -244,8 +253,7 @@ function bindEvents() {
     updateNetworkStatus();
 
     if (state.storageReady) {
-      await hydrateLocalStore();
-      await refreshState();
+      await syncCloudBackup();
     }
   });
 
@@ -432,6 +440,9 @@ async function saveEntry(habitId, status, options = {}) {
     if (!options.skipRefresh) {
       await refreshState();
     }
+    if (state.isOnline) {
+      await syncCloudBackup();
+    }
   } catch (error) {
     console.error(error);
     setComposerFeedback("Could not save that status.");
@@ -450,10 +461,20 @@ async function confirmAndDeleteHabit(habitId) {
   }
 
   try {
+    const relatedEntryKeys = state.entries
+      .filter((entry) => entry.habitId === habitId)
+      .map((entry) => entry.key || `${entry.habitId}:${entry.date}`);
+    await queuePendingSyncDeletes({
+      habitIds: [habitId],
+      entryKeys: relatedEntryKeys
+    });
     await deleteHabit(habitId);
     state.selectedHabitId = state.habits.find((item) => item.id !== habitId)?.id || null;
     setActiveView("today");
     await refreshState();
+    if (state.isOnline) {
+      await syncCloudBackup();
+    }
   } catch (error) {
     console.error(error);
     setComposerFeedback("Could not delete the habit. Please try again.");
@@ -1869,8 +1890,14 @@ async function clearSelectedLogDate() {
   const selectedDate = state.selectedLogDate;
 
   try {
+    await queuePendingSyncDeletes({
+      entryKeys: [`${state.selectedLogHabitId}:${selectedDate}`]
+    });
     await deleteEntry(state.selectedLogHabitId, selectedDate);
     await refreshState();
+    if (state.isOnline) {
+      await syncCloudBackup();
+    }
   } catch (error) {
     console.error(error);
   }
@@ -1894,18 +1921,48 @@ async function requestPersistentStorage() {
   }
 }
 
-async function hydrateLocalStore() {
-  try {
-    const result = await hydrateFromServer(fetchJson);
+async function syncCloudBackup() {
+  if (!state.isOnline || syncInFlight) {
+    return;
+  }
 
-    if (result.imported) {
-      setComposerFeedback(
-        `Imported ${result.counts.habits} habits and ${result.counts.entries} entries.`
-      );
+  syncInFlight = true;
+
+  try {
+    const deviceId = getStableDeviceId();
+    const pendingDeletes = await getPendingSyncDeletes();
+    const remoteState = await fetchJson(`/api/sync/pull?deviceId=${encodeURIComponent(deviceId)}`);
+
+    if (remoteState?.configured === false) {
+      return;
+    }
+
+    const mergeResult = await mergeRemoteState(remoteState, {
+      pendingHabitDeletes: pendingDeletes.habitIds,
+      pendingEntryDeletes: pendingDeletes.entryKeys
+    });
+
+    if (mergeResult.imported) {
       await refreshState();
     }
+
+    const localState = await getLocalState();
+    const pushResult = await postJson("/api/sync/push", {
+      deviceId,
+      habits: localState.habits,
+      entries: localState.entries,
+      pendingDeletes
+    });
+
+    if (pushResult?.configured === false) {
+      return;
+    }
+
+    await clearPendingSyncDeletes();
   } catch (error) {
     console.error(error);
+  } finally {
+    syncInFlight = false;
   }
 }
 
@@ -1941,4 +1998,47 @@ async function postJson(url, body) {
   }
 
   return response.json();
+}
+
+function getStableDeviceId() {
+  try {
+    const existing = localStorage.getItem(DEVICE_ID_KEY);
+    if (existing) {
+      return existing;
+    }
+  } catch (error) {
+    console.error(error);
+  }
+
+  const fingerprintId = buildDeviceFingerprintId();
+
+  try {
+    localStorage.setItem(DEVICE_ID_KEY, fingerprintId);
+  } catch (error) {
+    console.error(error);
+  }
+
+  return fingerprintId;
+}
+
+function buildDeviceFingerprintId() {
+  const parts = [
+    navigator.userAgent || "",
+    navigator.language || "",
+    navigator.platform || "",
+    Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+    String(screen.width || ""),
+    String(screen.height || ""),
+    String(screen.colorDepth || ""),
+    String(navigator.hardwareConcurrency || ""),
+    String(navigator.maxTouchPoints || "")
+  ];
+  const raw = parts.join("|");
+  let hash = 0;
+
+  for (let index = 0; index < raw.length; index += 1) {
+    hash = ((hash << 5) - hash + raw.charCodeAt(index)) | 0;
+  }
+
+  return `device_${Math.abs(hash).toString(16)}`;
 }

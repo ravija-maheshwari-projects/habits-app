@@ -8,6 +8,7 @@ loadEnvFile();
 
 const { initializeDatabase, getState, createHabit, findHabitById, upsertEntry } = require("./db");
 const { inferHabit } = require("./inference");
+const { pullDeviceState, pushDeviceState } = require("./cloud-sync");
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(process.cwd(), "public");
@@ -42,6 +43,34 @@ async function handleApi(req, res, url) {
 
   if (req.method === "GET" && url.pathname === "/api/health") {
     sendJson(res, 200, { ok: true, storage: "sqlite" });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/sync/pull") {
+    const deviceId = String(url.searchParams.get("deviceId") || "").trim();
+
+    if (!deviceId) {
+      sendJson(res, 400, { error: "deviceId is required." });
+      return;
+    }
+
+    sendJson(res, 200, {
+      deviceId,
+      ...(await pullDeviceState(deviceId))
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/sync/push") {
+    const body = await readJson(req);
+    const deviceId = String(body.deviceId || "").trim();
+
+    if (!deviceId) {
+      sendJson(res, 400, { error: "deviceId is required." });
+      return;
+    }
+
+    sendJson(res, 200, await pushDeviceState(deviceId, body));
     return;
   }
 
@@ -134,7 +163,8 @@ function contentType(filePath) {
     ".js": "application/javascript; charset=utf-8",
     ".json": "application/json; charset=utf-8",
     ".webmanifest": "application/manifest+json; charset=utf-8",
-    ".svg": "image/svg+xml; charset=utf-8"
+    ".svg": "image/svg+xml; charset=utf-8",
+    ".png": "image/png"
   };
   return types[extension] || "application/octet-stream";
 }

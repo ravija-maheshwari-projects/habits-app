@@ -43,6 +43,105 @@ export async function getState() {
   };
 }
 
+export async function mergeRemoteState(remoteState, options = {}) {
+  const database = await initializeStorage();
+  const pendingHabitDeletes = new Set(options.pendingHabitDeletes || []);
+  const pendingEntryDeletes = new Set(options.pendingEntryDeletes || []);
+  const currentState = await getState();
+  const currentHabits = new Map(currentState.habits.map((habit) => [habit.id, habit]));
+  const currentEntries = new Map(currentState.entries.map((entry) => [entry.key, entry]));
+  const transaction = database.transaction([HABITS_STORE, ENTRIES_STORE], "readwrite");
+  const habitStore = transaction.objectStore(HABITS_STORE);
+  const entryStore = transaction.objectStore(ENTRIES_STORE);
+  let importedHabits = 0;
+  let importedEntries = 0;
+
+  const remoteHabits = Array.isArray(remoteState.habits) ? remoteState.habits : [];
+  remoteHabits.forEach((habit) => {
+    if (!habit?.id || pendingHabitDeletes.has(habit.id)) {
+      return;
+    }
+
+    const normalizedHabit = {
+      ...habit,
+      targetCount: normalizePositiveInteger(habit.targetCount, 1),
+      periodDays: normalizePositiveInteger(habit.periodDays, 7),
+      weeklyDays: normalizeWeeklyDays(habit.weeklyDays || [])
+    };
+    const localHabit = currentHabits.get(normalizedHabit.id);
+
+    if (!localHabit || isRemoteNewer(normalizedHabit.updatedAt, localHabit.updatedAt)) {
+      habitStore.put(normalizedHabit);
+      importedHabits += 1;
+    }
+  });
+
+  const remoteEntries = Array.isArray(remoteState.entries) ? remoteState.entries : [];
+  remoteEntries.forEach((entry) => {
+    const key = entry?.key || (entry?.habitId && entry?.date ? entryKey(entry.habitId, entry.date) : "");
+    if (!key || pendingEntryDeletes.has(key)) {
+      return;
+    }
+
+    const normalizedEntry = {
+      ...entry,
+      key
+    };
+    const localEntry = currentEntries.get(key);
+
+    if (!localEntry || isRemoteNewer(normalizedEntry.updatedAt, localEntry.updatedAt)) {
+      entryStore.put(normalizedEntry);
+      importedEntries += 1;
+    }
+  });
+
+  await waitForTransaction(transaction);
+
+  return {
+    imported: importedHabits > 0 || importedEntries > 0,
+    counts: {
+      habits: importedHabits,
+      entries: importedEntries
+    }
+  };
+}
+
+export async function getPendingSyncDeletes() {
+  const database = await initializeStorage();
+  const record = await get(database, META_STORE, "pending-sync-deletes");
+  return {
+    habitIds: Array.isArray(record?.value?.habitIds) ? record.value.habitIds : [],
+    entryKeys: Array.isArray(record?.value?.entryKeys) ? record.value.entryKeys : []
+  };
+}
+
+export async function queuePendingSyncDeletes(input) {
+  const database = await initializeStorage();
+  const existing = await getPendingSyncDeletes();
+  const next = {
+    habitIds: [...new Set([...existing.habitIds, ...(input.habitIds || [])])],
+    entryKeys: [...new Set([...existing.entryKeys, ...(input.entryKeys || [])])]
+  };
+
+  await put(database, META_STORE, {
+    id: "pending-sync-deletes",
+    value: next
+  });
+
+  return next;
+}
+
+export async function clearPendingSyncDeletes() {
+  const database = await initializeStorage();
+  await put(database, META_STORE, {
+    id: "pending-sync-deletes",
+    value: {
+      habitIds: [],
+      entryKeys: []
+    }
+  });
+}
+
 export async function createHabit(input) {
   const database = await initializeStorage();
   const now = new Date().toISOString();
@@ -291,4 +390,8 @@ function normalizePositiveInteger(value, fallback) {
 
 function normalizeWeeklyDays(days) {
   return [...new Set(days.map((day) => Number(day)).filter((day) => day >= 0 && day <= 6))].sort();
+}
+
+function isRemoteNewer(remoteUpdatedAt, localUpdatedAt) {
+  return String(remoteUpdatedAt || "") > String(localUpdatedAt || "");
 }
