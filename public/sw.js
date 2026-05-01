@@ -1,4 +1,4 @@
-const CACHE_NAME = "habit-terminal-v1";
+const CACHE_NAME = "habitai-v2";
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -6,7 +6,9 @@ const APP_SHELL = [
   "/app.js",
   "/storage.js",
   "/manifest.webmanifest",
-  "/icon.svg"
+  "/icons/icon-180.png",
+  "/icons/icon-512.png",
+  "/icons/icon-1024.png"
 ];
 
 self.addEventListener("install", (event) => {
