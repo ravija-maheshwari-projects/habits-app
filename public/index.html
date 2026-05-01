@@ -2,118 +2,161 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Habit Terminal</title>
+    <meta name="theme-color" content="#f4f7f5" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Habit Terminal" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="background-grid" aria-hidden="true"></div>
     <main class="app-shell">
-      <section class="hero panel">
-        <div class="eyebrow">habit://ai-assisted-tracking</div>
-        <h1>Habit Terminal</h1>
-        <p class="hero-copy">
-          Type habits in plain English. The frontend talks to a backend API, habits are stored
-          in a real SQLite database, and every day can be marked done or skipped on a calendar graph.
-        </p>
-        <div class="hero-status">
-          <span id="inference-status" class="status-pill">AI fallback ready</span>
-          <span id="storage-status" class="status-pill">Persistent storage online</span>
+      <header class="app-header">
+        <div class="header-copy">
+          <div id="header-kicker" class="header-kicker">Today</div>
+          <h1 id="header-title">Good day</h1>
+          <p id="header-subtitle" class="header-subtitle">
+            A calm place to keep your habits moving.
+          </p>
         </div>
-      </section>
+      </header>
 
-      <section class="composer panel">
-        <div class="panel-title">New Habit</div>
-        <form id="habit-form">
+      <section id="today-view" class="screen-view"></section>
+      <section id="insights-view" class="screen-view" hidden></section>
+      <section id="habit-detail-view" class="screen-view" hidden></section>
+
+      <button
+        id="floating-add-button"
+        class="floating-add-button"
+        type="button"
+        aria-label="Add habit"
+      >
+        <span class="floating-add-plus">+</span>
+      </button>
+
+      <nav class="bottom-nav" aria-label="Primary">
+        <button class="bottom-nav-item is-active" data-nav-view="today" type="button">
+          <span class="bottom-nav-icon">◉</span>
+          <span>Today</span>
+        </button>
+        <button class="bottom-nav-item" data-nav-view="insights" type="button">
+          <span class="bottom-nav-icon">◌</span>
+          <span>Insights</span>
+        </button>
+      </nav>
+    </main>
+
+    <section id="composer-modal" class="composer-modal" hidden>
+      <div id="composer-backdrop" class="composer-backdrop"></div>
+      <div class="composer-sheet" role="dialog" aria-modal="true" aria-labelledby="composer-title">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <div class="composer-sheet-header">
+          <h2 id="composer-title">Create Habit</h2>
+        </div>
+        <form id="habit-form" class="composer-form">
+          <div id="habit-title-field" class="form-field" hidden>
+            <label class="field-label" for="habit-title-input">Title</label>
+            <input id="habit-title-input" class="text-input" type="text" maxlength="120" />
+          </div>
           <label class="sr-only" for="habit-input">Habit description</label>
           <textarea
             id="habit-input"
-            rows="3"
-            placeholder="Try: Run 5 km every Monday, Wednesday, and Friday"
+            rows="4"
+            placeholder="Try: Walk for 30 minutes every weekday morning"
           ></textarea>
-          <div class="form-row">
-            <button type="submit" class="primary-button">Infer and create habit</button>
-            <div id="composer-feedback" class="helper-text">
-              Describe a habit naturally and the app will suggest cadence details.
-            </div>
+          <div class="composer-actions">
+            <button id="habit-submit-button" type="submit" class="primary-button">Infer and create habit</button>
+            <p id="composer-feedback" class="composer-feedback" hidden></p>
           </div>
         </form>
-      </section>
+      </div>
+    </section>
 
-      <section class="overview">
-        <article class="panel stat-card">
-          <div class="panel-title">Habits</div>
-          <div id="habit-count" class="stat-value">0</div>
-          <div class="helper-text">Unlimited habits supported.</div>
-        </article>
-        <article class="panel stat-card">
-          <div class="panel-title">Completed Today</div>
-          <div id="done-today-count" class="stat-value">0</div>
-          <div class="helper-text">Entries marked as done for today.</div>
-        </article>
-        <article class="panel stat-card">
-          <div class="panel-title">Skipped Today</div>
-          <div id="skipped-today-count" class="stat-value">0</div>
-          <div class="helper-text">Entries marked as skipped for today.</div>
-        </article>
-      </section>
-
-      <section class="panel">
-        <div class="panel-header">
+    <section id="log-sheet-modal" class="composer-modal" hidden>
+      <div id="log-sheet-backdrop" class="composer-backdrop"></div>
+      <div class="composer-sheet log-sheet" role="dialog" aria-modal="true" aria-labelledby="log-sheet-title">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <div class="composer-sheet-header">
           <div>
-            <div class="panel-title">Habit Matrix</div>
-            <div class="helper-text">Each habit keeps its own cadence and calendar history.</div>
+            <h2 id="log-sheet-title">Log day</h2>
+            <p id="log-sheet-subtitle" class="composer-feedback"></p>
           </div>
         </div>
-        <div id="habit-list" class="habit-list"></div>
-      </section>
-    </main>
+        <div class="composer-form log-sheet-actions">
+          <button id="log-sheet-done" type="button" class="action-button done-button">Mark done</button>
+          <button id="log-sheet-skip" type="button" class="action-button skip-button">Mark skipped</button>
+          <button id="log-sheet-clear" type="button" class="action-button">Clear log</button>
+          <button id="log-sheet-cancel" type="button" class="action-button">Cancel</button>
+        </div>
+      </div>
+    </section>
 
-    <template id="habit-card-template">
-      <article class="habit-card">
-        <div class="habit-header">
-          <div>
-            <div class="habit-name"></div>
-            <div class="habit-meta"></div>
+    <template id="today-card-template">
+      <article class="today-card">
+        <div class="swipe-actions" aria-hidden="true">
+          <div class="swipe-action swipe-action-done">
+            <span class="swipe-action-icon">✓</span>
           </div>
-          <div class="habit-actions">
-            <button class="action-button done-button">Mark done</button>
-            <button class="action-button skip-button">Mark skipped</button>
+          <div class="swipe-action swipe-action-skip">
+            <span class="swipe-action-icon">↷</span>
           </div>
         </div>
-        <div class="habit-rationale"></div>
-        <div class="streak-row">
-          <div class="mini-stat">
-            <span class="mini-label">Scheduled this week</span>
-            <strong class="scheduled-count">0</strong>
+        <div class="today-card-content">
+          <div class="today-card-top">
+            <div>
+              <h2 class="today-card-title"></h2>
+              <p class="today-card-meta"></p>
+            </div>
           </div>
-          <div class="mini-stat">
-            <span class="mini-label">Done this week</span>
-            <strong class="done-count">0</strong>
+          <div class="progress-row">
+            <div class="progress-copy">
+              <span class="progress-label progress-window-label"></span>
+              <strong class="progress-value progress-window-value"></strong>
+            </div>
           </div>
-          <div class="mini-stat">
-            <span class="mini-label">Skipped this week</span>
-            <strong class="skipped-count">0</strong>
+          <div class="progress-visuals">
+            <div class="progress-track-group">
+              <div class="progress-track-copy">
+                <span class="progress-track-label progress-track-window-label"></span>
+                <span class="progress-track-meta progress-track-window-meta"></span>
+              </div>
+              <div class="progress-track">
+                <div class="progress-fill progress-window-fill"></div>
+              </div>
+            </div>
           </div>
-        </div>
-        <div class="calendar-wrap">
-          <div class="calendar-legend">
-            <span><i class="legend-box legend-none"></i> Not logged</span>
-            <span><i class="legend-box legend-done"></i> Done</span>
-            <span><i class="legend-box legend-skipped"></i> Skipped</span>
-            <span><i class="legend-box legend-scheduled"></i> Scheduled</span>
-          </div>
-          <div class="calendar-grid"></div>
         </div>
       </article>
     </template>
 
-    <script src="/app.js" defer></script>
+    <template id="habit-row-template">
+      <article class="habit-row-card">
+        <button class="habit-row-button" type="button">
+          <div class="habit-row-leading">
+            <div class="habit-row-dot"></div>
+            <div>
+              <h2 class="habit-row-title"></h2>
+              <p class="habit-row-meta"></p>
+            </div>
+          </div>
+          <div class="habit-row-trailing">
+            <span class="habit-row-status"></span>
+            <span class="habit-row-chevron">›</span>
+          </div>
+        </button>
+      </article>
+    </template>
+    <script type="module" src="/app.js"></script>
   </body>
 </html>
