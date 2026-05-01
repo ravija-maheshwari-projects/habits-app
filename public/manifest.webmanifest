@@ -1,6 +1,6 @@
 {
-  "name": "Habit Terminal",
-  "short_name": "Habits",
+  "name": "TrackrAI",
+  "short_name": "Trackr",
   "description": "Track habits from your home screen with offline local persistence.",
   "start_url": "/",
   "scope": "/",

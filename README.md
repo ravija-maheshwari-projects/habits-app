@@ -1,4 +1,4 @@
-# Habit Terminal
+# TrackrAI
 
 AI-assisted habit tracking web app with:
 
