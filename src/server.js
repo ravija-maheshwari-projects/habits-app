@@ -90,6 +90,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/habits") {
     const body = await readJson(req);
     const name = String(body.name || "").trim();
+    const goal = body.goal || {};
     const cadence = body.cadence || {};
 
     if (!name) {
@@ -101,7 +102,8 @@ async function handleApi(req, res, url) {
       name,
       originalPrompt: String(body.originalPrompt || name),
       category: String(body.category || "general"),
-      unit: String(cadence.unit || "times"),
+      unit: String(goal.unit || "session"),
+      goalCount: normalizePositiveInteger(goal.targetCount, 1),
       targetCount: normalizePositiveInteger(cadence.targetCount, 1),
       periodDays: normalizePositiveInteger(cadence.periodDays, 7),
       weeklyDays: normalizeWeeklyDays(cadence.weeklyDays || [])

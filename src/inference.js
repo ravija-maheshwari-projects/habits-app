@@ -31,59 +31,64 @@ Return ONLY a valid JSON object with this exact shape:
   "name": string,
   "category": string,
   "rationale": string,
+  "goal": {
+    "targetCount": number,
+    "unit": string
+  },
   "cadence": {
     "targetCount": number,
     "periodDays": number,
-    "weeklyDays": number[],
-    "unit": string
+    "weeklyDays": number[]
   }
 }
 
-## UNIT
+## GOAL
 Preserve any explicit quantity and unit from the user (e.g. "10 minutes", "5 km", "20 pages").
 Do NOT substitute schedule counts (like "7 days") for measurement units.
-Valid units include minutes, hours, pages, km, miles, glasses, cups, times, reps, session, time, and similar concrete habit units.
-If a quantity is provided (e.g. "5 km"), targetCount should be that number (5) and unit should be that unit (km).
-If no quantity is provided (e.g. "go to the gym"), targetCount defaults to 1 and unit defaults to "session" or "time".
+Valid units include minutes, hours, pages, km, miles, glasses, cups, steps, reps, session, and similar concrete habit units.
+If a quantity is provided (e.g. "5 km"), goal.targetCount should be that number (5) and goal.unit should be that unit (km).
+If no quantity is provided (e.g. "go to the gym"), goal.targetCount defaults to 1 and goal.unit defaults to "session".
 
 ## CADENCE RULES (in priority order)
 
 1. NAMED WEEKDAYS - user explicitly names days (e.g. "Monday Wednesday Friday", "Mon/Wed/Fri")
-   -> periodDays: 7, weeklyDays: [<day indices>], targetCount: number of named days
+   -> cadence.periodDays: 7, cadence.weeklyDays: [<day indices>], cadence.targetCount: number of named days
    Day index: Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6, Sun=7
 
 2. DAILY - "every day", "daily", "each day", "every day in a week"
-   -> targetCount: 1, periodDays: 1, weeklyDays: []
+   -> cadence.targetCount: 1, cadence.periodDays: 1, cadence.weeklyDays: []
 
-3. N TIMES A WEEK - "N times a week / per week"
-   -> targetCount: N, periodDays: 7, weeklyDays: []
+3. N TIMES OR DAYS A WEEK - "N times a week / per week", "N days a week", "N days in a week"
+   -> cadence.targetCount: N, cadence.periodDays: 7, cadence.weeklyDays: []
 
 4. N TIMES A MONTH - "N times a month / per month"
-   -> targetCount: N, periodDays: 30, weeklyDays: []
+   -> cadence.targetCount: N, cadence.periodDays: 30, cadence.weeklyDays: []
 
 5. N TIMES A YEAR - "N times a year / per year"
-   -> targetCount: N, periodDays: 365, weeklyDays: []
+   -> cadence.targetCount: N, cadence.periodDays: 365, cadence.weeklyDays: []
 
 6. EVERY OTHER DAY - "every other day", "alternate days"
-   -> targetCount: 1, periodDays: 2, weeklyDays: []
+   -> cadence.targetCount: 1, cadence.periodDays: 2, cadence.weeklyDays: []
 
 7. EVERY WEEKDAY - "every weekday", "on weekdays", "Monday to Friday"
-   -> targetCount: 5, periodDays: 7, weeklyDays: [1,2,3,4,5]
+   -> cadence.targetCount: 5, cadence.periodDays: 7, cadence.weeklyDays: [1,2,3,4,5]
 
 8. EVERY WEEKEND - "every weekend", "on weekends"
-   -> targetCount: 2, periodDays: 7, weeklyDays: [6,7]
+   -> cadence.targetCount: 2, cadence.periodDays: 7, cadence.weeklyDays: [6,7]
 
 9. FORTNIGHTLY - "every two weeks", "fortnightly", "biweekly"
-   -> targetCount: 1, periodDays: 14, weeklyDays: []
+   -> cadence.targetCount: 1, cadence.periodDays: 14, cadence.weeklyDays: []
    Note: "biweekly" is ambiguous - always treat it as every 2 weeks, never twice a week.
 
 10. AMBIGUOUS/MISSING - "regularly", "often", "sometimes", "a few times", or no frequency given
-    -> default to: targetCount: 1, periodDays: 1, weeklyDays: []
+    -> default to: cadence.targetCount: 1, cadence.periodDays: 1, cadence.weeklyDays: []
     Set rationale to: "Frequency was unclear, defaulted to daily"
 
 ## ADDITIONAL RULES
 - Treat spelled-out counts like one, two, three, four, and five the same as digits.
 - Only populate weeklyDays when the user explicitly names weekdays or clearly means weekdays/weekends.
+- Keep the habit name focused on the action and explicit quantity, not the cadence wording.
+- Example: "walk 10,000 steps six days in a week" should become a name like "Walk 10,000 steps", a goal of 10000 steps, and a cadence of 6 in 7 days.
 - For rationale, briefly explain how the cadence was interpreted.
 - Return only JSON with no markdown or extra explanation.`
           }
@@ -106,23 +111,31 @@ If no quantity is provided (e.g. "go to the gym"), targetCount defaults to 1 and
         schema: {
           type: "object",
           additionalProperties: false,
-          required: ["name", "category", "rationale", "cadence"],
+          required: ["name", "category", "rationale", "goal", "cadence"],
           properties: {
             name: { type: "string" },
             category: { type: "string" },
             rationale: { type: "string" },
+            goal: {
+              type: "object",
+              additionalProperties: false,
+              required: ["targetCount", "unit"],
+              properties: {
+                targetCount: { type: "integer", minimum: 1, maximum: 1000000 },
+                unit: { type: "string" }
+              }
+            },
             cadence: {
               type: "object",
               additionalProperties: false,
-              required: ["targetCount", "periodDays", "weeklyDays", "unit"],
+              required: ["targetCount", "periodDays", "weeklyDays"],
               properties: {
-                targetCount: { type: "integer", minimum: 1, maximum: 1000 },
+                targetCount: { type: "integer", minimum: 1, maximum: 365 },
                 periodDays: { type: "integer", minimum: 1, maximum: 365 },
                 weeklyDays: {
                   type: "array",
                   items: { type: "integer", minimum: 1, maximum: 7 }
-                },
-                unit: { type: "string" }
+                }
               }
             }
           }
@@ -174,76 +187,50 @@ function extractResponseText(result) {
 function inferHabitHeuristically(description) {
   const cleaned = description.replace(/\s+/g, " ").trim();
   const lower = cleaned.toLowerCase();
-  const dayMatches = Array.from(lower.matchAll(/\b(mon|tues|wednes|thurs|fri|satur|sun)day\b/g));
-  const explicitCountMatch = lower.match(/(\d+)\s*(times?|x)\b/);
-  const quantityMatch = lower.match(
-    /(\d+)\s*(minutes?|hours?|pages?|kilometers?|km|miles?|glasses?|cups?)\b/
-  );
-  const dailyMatch = /\bdaily|every day|each day\b/.test(lower);
-  const weeklyMatch = /\bweekly|per week|a week|every week\b/.test(lower);
-  const monthlyMatch = /\bmonthly|per month|a month|every month\b/.test(lower);
-
-  let unit = inferUnit(lower);
-  let targetCount = quantityMatch
-    ? Number(quantityMatch[1])
-    : explicitCountMatch
-      ? Number(explicitCountMatch[1])
-      : 1;
-  let periodDays = 7;
-  let weeklyDays = [];
-
-  if (dayMatches.length > 0) {
-    weeklyDays = [...new Set(dayMatches.map((match) => weekdayIndex(match[0])))].filter(
-      (value) => value !== -1
-    );
-    periodDays = 7;
-  } else if (dailyMatch) {
-    periodDays = 7;
-    weeklyDays = [0, 1, 2, 3, 4, 5, 6];
-  } else if (monthlyMatch) {
-    periodDays = 30;
-  } else if (weeklyMatch) {
-    periodDays = 7;
-  } else if (!quantityMatch && !explicitCountMatch) {
-    targetCount = 3;
-    periodDays = 7;
-    weeklyDays = [1, 3, 5];
-  }
+  const goal = inferGoal(lower);
+  const cadence = inferCadence(lower);
 
   const name = cleaned
     .replace(/\b(i want to|i need to|help me|track|habit|should)\b/gi, "")
+    .replace(/\b(?:every day|daily|each day|every other day|alternate days|every weekday|on weekdays|monday to friday|every weekend|on weekends|fortnightly|biweekly|every two weeks)\b/gi, "")
+    .replace(/\b(?:\d[\d,]*|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:times?|days?|sessions?)\s+(?:(?:a|per)\s+(?:week|month|year)|in\s+(?:a\s+)?(?:week|month|year))\b/gi, "")
+    .replace(/\b(?:\d[\d,]*|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:times?|sessions?)\s+every\s+(?:\d[\d,]*|one|two|three|four|five|six|seven|eight|nine|ten)\s+days?\b/gi, "")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^[,:-]\s*/, "") || cleaned;
 
+  const titleWithGoal = goal.targetCount > 1 && goal.unit !== "session" && !new RegExp(`\\b${escapeRegExp(goal.unit)}\\b`, "i").test(name)
+    ? `${name} ${goal.targetCount.toLocaleString()} ${goal.unit}`
+    : name;
+
   return sanitizeInference(
     {
-      name: sentenceCase(name),
+      name: sentenceCase(titleWithGoal),
       category: inferCategory(lower),
-      rationale: buildRationale(targetCount, periodDays, weeklyDays, unit),
-      cadence: {
-        targetCount,
-        periodDays,
-        weeklyDays,
-        unit
-      }
+      rationale: buildRationale(goal, cadence),
+      goal,
+      cadence
     },
     description
   );
 }
 
 function sanitizeInference(inference, originalText) {
+  const goal = inference.goal || {};
   const cadence = inference.cadence || {};
 
   return {
     name: sentenceCase(String(inference.name || originalText).trim()),
     category: String(inference.category || "general").trim().toLowerCase(),
     rationale: String(inference.rationale || "Suggested from your description.").trim(),
+    goal: {
+      targetCount: normalizePositiveInteger(goal.targetCount, 1),
+      unit: String(goal.unit || "session").trim() || "session"
+    },
     cadence: {
       targetCount: normalizePositiveInteger(cadence.targetCount, 1),
       periodDays: normalizePositiveInteger(cadence.periodDays, 7),
-      weeklyDays: normalizeWeeklyDays(cadence.weeklyDays || []),
-      unit: String(cadence.unit || "times").trim() || "times"
+      weeklyDays: normalizeWeeklyDays(cadence.weeklyDays || [])
     }
   };
 }
@@ -255,7 +242,9 @@ function inferUnit(text) {
   if (/\bkilometers?\b|\bkm\b/.test(text)) return "km";
   if (/\bmiles?\b/.test(text)) return "miles";
   if (/\bglasses?\b|\bcups?\b/.test(text)) return "glasses";
-  return "times";
+  if (/\bsteps?\b/.test(text)) return "steps";
+  if (/\breps?\b/.test(text)) return "reps";
+  return "session";
 }
 
 function inferCategory(text) {
@@ -267,13 +256,17 @@ function inferCategory(text) {
   return "general";
 }
 
-function buildRationale(targetCount, periodDays, weeklyDays, unit) {
-  if (weeklyDays.length) {
-    const dayNames = weeklyDays.map((day) => shortDayName(day)).join(", ");
-    return `Suggested cadence: ${targetCount} ${unit} on ${dayNames}.`;
+function buildRationale(goal, cadence) {
+  if (cadence.weeklyDays.length) {
+    const dayNames = cadence.weeklyDays.map((day) => shortDayName(day)).join(", ");
+    return `Detected a goal of ${goal.targetCount.toLocaleString()} ${goal.unit} with fixed weekly days on ${dayNames}.`;
   }
 
-  return `Suggested cadence: ${targetCount} ${unit} every ${periodDays} day${periodDays === 1 ? "" : "s"}.`;
+  if (cadence.periodDays === 1) {
+    return `Detected a goal of ${goal.targetCount.toLocaleString()} ${goal.unit} with a daily cadence.`;
+  }
+
+  return `Detected a goal of ${goal.targetCount.toLocaleString()} ${goal.unit} with a cadence of ${cadence.targetCount} in ${cadence.periodDays} days.`;
 }
 
 function weekdayIndex(dayText) {
@@ -288,6 +281,135 @@ function weekdayIndex(dayText) {
     sat: 6
   };
   return map[value] ?? -1;
+}
+
+function inferGoal(text) {
+  const quantityMatch = text.match(/(\d[\d,]*)\s*(minutes?|hours?|pages?|kilometers?|km|miles?|glasses?|cups?|steps?|reps?)\b/);
+  const unit = inferUnit(text);
+
+  if (quantityMatch) {
+    return {
+      targetCount: parseNumericToken(quantityMatch[1], 1),
+      unit: normalizeUnit(quantityMatch[2])
+    };
+  }
+
+  return {
+    targetCount: 1,
+    unit
+  };
+}
+
+function inferCadence(text) {
+  const namedDays = extractNamedWeekdays(text);
+  if (namedDays.length) {
+    return {
+      targetCount: namedDays.length,
+      periodDays: 7,
+      weeklyDays: namedDays
+    };
+  }
+
+  if (/\bevery weekday\b|\bon weekdays\b|\bmonday to friday\b/.test(text)) {
+    return { targetCount: 5, periodDays: 7, weeklyDays: [1, 2, 3, 4, 5] };
+  }
+
+  if (/\bevery weekend\b|\bon weekends\b/.test(text)) {
+    return { targetCount: 2, periodDays: 7, weeklyDays: [6, 0] };
+  }
+
+  if (/\bevery other day\b|\balternate days\b/.test(text)) {
+    return { targetCount: 1, periodDays: 2, weeklyDays: [] };
+  }
+
+  if (/\bevery day\b|\bdaily\b|\beach day\b|\bevery day in a week\b/.test(text)) {
+    return { targetCount: 1, periodDays: 1, weeklyDays: [] };
+  }
+
+  if (/\bevery two weeks\b|\bfortnightly\b|\bbiweekly\b/.test(text)) {
+    return { targetCount: 1, periodDays: 14, weeklyDays: [] };
+  }
+
+  const fixedPeriodCount = text.match(/\b(\d[\d,]*|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:times?|sessions?)\s+every\s+(\d[\d,]*|one|two|three|four|five|six|seven|eight|nine|ten)\s+days?\b/);
+  if (fixedPeriodCount) {
+    return {
+      targetCount: parseNumericToken(fixedPeriodCount[1], 1),
+      periodDays: parseNumericToken(fixedPeriodCount[2], 7),
+      weeklyDays: []
+    };
+  }
+
+  const weeklyCount = matchCadenceCount(text, /\b(times?|days?|sessions?)\s+(?:(?:a|per)\s+week|in\s+(?:a\s+)?week)\b/);
+  if (weeklyCount) {
+    return { targetCount: weeklyCount, periodDays: 7, weeklyDays: [] };
+  }
+
+  const monthlyCount = matchCadenceCount(text, /\b(times?|days?|sessions?)\s+(?:(?:a|per)\s+month|in\s+(?:a\s+)?month)\b/);
+  if (monthlyCount) {
+    return { targetCount: monthlyCount, periodDays: 30, weeklyDays: [] };
+  }
+
+  const yearlyCount = matchCadenceCount(text, /\b(times?|days?|sessions?)\s+(?:(?:a|per)\s+year|in\s+(?:a\s+)?year)\b/);
+  if (yearlyCount) {
+    return { targetCount: yearlyCount, periodDays: 365, weeklyDays: [] };
+  }
+
+  return { targetCount: 1, periodDays: 1, weeklyDays: [] };
+}
+
+function extractNamedWeekdays(text) {
+  const matches = Array.from(
+    text.matchAll(/\b(mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b/g)
+  );
+  return [...new Set(matches.map((match) => weekdayIndex(match[0])))]
+    .filter((value) => value !== -1)
+    .sort((left, right) => left - right);
+}
+
+function matchCadenceCount(text, trailingPattern) {
+  const match = text.match(new RegExp(`(\\d[\\d,]*|one|two|three|four|five|six|seven|eight|nine|ten)\\s+${trailingPattern.source}`, "i"));
+  if (!match) {
+    return 0;
+  }
+
+  return parseNumericToken(match[1], 1);
+}
+
+function parseNumericToken(value, fallback) {
+  const raw = String(value || "").trim().toLowerCase();
+  const words = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10
+  };
+
+  if (words[raw]) {
+    return words[raw];
+  }
+
+  const normalized = Number(raw.replace(/,/g, ""));
+  return Number.isFinite(normalized) && normalized > 0 ? normalized : fallback;
+}
+
+function normalizeUnit(unit) {
+  const raw = String(unit || "").trim().toLowerCase();
+  if (raw === "kilometer" || raw === "kilometers") return "km";
+  if (raw === "glass") return "glasses";
+  if (raw === "cup") return "cups";
+  if (raw === "step") return "steps";
+  if (raw === "rep") return "reps";
+  return raw;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function shortDayName(day) {

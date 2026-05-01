@@ -200,7 +200,8 @@ function bindEvents() {
           name: customTitle,
           category: inference.category,
           originalPrompt: description,
-          unit: inference.cadence?.unit,
+          unit: inference.goal?.unit,
+          goalCount: inference.goal?.targetCount,
           targetCount: inference.cadence?.targetCount,
           periodDays: inference.cadence?.periodDays,
           weeklyDays: inference.cadence?.weeklyDays
@@ -213,7 +214,8 @@ function bindEvents() {
           name: inference.name,
           category: inference.category,
           originalPrompt: description,
-          unit: inference.cadence?.unit,
+          unit: inference.goal?.unit,
+          goalCount: inference.goal?.targetCount,
           targetCount: inference.cadence?.targetCount,
           periodDays: inference.cadence?.periodDays,
           weeklyDays: inference.cadence?.weeklyDays
@@ -1183,11 +1185,15 @@ function buildTodayCard(habit, entry) {
 }
 
 function compactCadence(habit) {
-  const days = habit.weeklyDays?.length
-    ? habit.weeklyDays.map(shortDayName).join(" · ")
-    : cadenceFrequencyLabel(habit);
-  const target = `${habit.targetCount} ${habit.unit}`;
-  return `${target} · ${days}`;
+  const parts = [];
+
+  if (hasMeaningfulGoal(habit)) {
+    parts.push(goalSummary(habit));
+  }
+
+  parts.push(cadenceSummary(habit));
+
+  return parts.join(" · ");
 }
 
 function initializeSwipeCards() {
@@ -1461,8 +1467,7 @@ function targetOccurrencesForWindow(habit, window) {
 }
 
 function usesWindowQuotaTarget(habit) {
-  const unit = String(habit.unit || "").trim().toLowerCase();
-  return unit === "times" || unit === "time" || unit === "session" || unit === "sessions";
+  return !habit.weeklyDays?.length && normalizePositiveInteger(habit.targetCount, 1) > 1;
 }
 
 function buildEmptyCard(title, copy) {
@@ -1678,14 +1683,20 @@ function entryForHabitAndDate(habitId, date) {
 
 function cadenceExplanation(habit) {
   if (habit.weeklyDays?.length) {
-    return `Tracking on ${habit.weeklyDays.map(shortDayName).join(", ")} · target ${habit.targetCount} ${habit.unit}.`;
+    return hasMeaningfulGoal(habit)
+      ? `Tracking on ${habit.weeklyDays.map(shortDayName).join(", ")} · target ${goalSummary(habit)}.`
+      : `Tracking on ${habit.weeklyDays.map(shortDayName).join(", ")}.`;
   }
 
-  if (habit.periodDays === 1) {
-    return `Tracking daily · target ${habit.targetCount} ${habit.unit}.`;
+  if (habit.periodDays === 1 && habit.targetCount === 1) {
+    return hasMeaningfulGoal(habit)
+      ? `Tracking daily · target ${goalSummary(habit)}.`
+      : "Tracking daily.";
   }
 
-  return `Tracking ${habit.targetCount} ${habit.unit} ${cadenceFrequencyLabel(habit)}.`;
+  return hasMeaningfulGoal(habit)
+    ? `Tracking ${cadenceSummary(habit)} · target ${goalSummary(habit)}.`
+    : `Tracking ${cadenceSummary(habit)}.`;
 }
 
 function cadenceFrequencyLabel(habit) {
@@ -1694,6 +1705,31 @@ function cadenceFrequencyLabel(habit) {
   }
 
   return `every ${habit.periodDays} day${habit.periodDays === 1 ? "" : "s"}`;
+}
+
+function cadenceSummary(habit) {
+  if (habit.weeklyDays?.length) {
+    return habit.weeklyDays.map(shortDayName).join(" · ");
+  }
+
+  if (habit.periodDays === 1 && habit.targetCount === 1) {
+    return "daily";
+  }
+
+  if (normalizePositiveInteger(habit.targetCount, 1) > 1) {
+    return `${habit.targetCount} times · ${cadenceFrequencyLabel(habit)}`;
+  }
+
+  return cadenceFrequencyLabel(habit);
+}
+
+function goalSummary(habit) {
+  return `${formatCount(habit.goalCount || 1)} ${habit.unit || "session"}`;
+}
+
+function hasMeaningfulGoal(habit) {
+  const unit = String(habit.unit || "").trim().toLowerCase();
+  return normalizePositiveInteger(habit.goalCount, 1) > 1 || (unit && unit !== "session");
 }
 
 function renderLogSheet() {
@@ -1855,6 +1891,15 @@ function formatFriendlyDate(date) {
 
 function capitalize(value) {
   return String(value).charAt(0).toUpperCase() + String(value).slice(1);
+}
+
+function normalizePositiveInteger(value, fallback) {
+  const normalized = Number(value);
+  return Number.isInteger(normalized) && normalized > 0 ? normalized : fallback;
+}
+
+function formatCount(value) {
+  return normalizePositiveInteger(value, 1).toLocaleString();
 }
 
 function isHabitScheduledOnDate(habit, date) {

@@ -129,6 +129,10 @@ function mapHabitFromDb(row) {
     originalPrompt: row.original_prompt,
     category: row.category,
     unit: row.unit,
+    goalCount: normalizePositiveInteger(
+      row.goal_count,
+      deriveLegacyGoalCount(row.original_prompt, row.unit, row.target_count)
+    ),
     targetCount: row.target_count,
     periodDays: row.period_days,
     weeklyDays: normalizeWeeklyDays(row.weekly_days || []),
@@ -144,7 +148,7 @@ function mapHabitToDb(habit, deviceId) {
     name: habit.name,
     original_prompt: habit.originalPrompt || habit.name,
     category: habit.category || "general",
-    unit: habit.unit || "times",
+    unit: habit.unit || "session",
     target_count: normalizePositiveInteger(habit.targetCount, 1),
     period_days: normalizePositiveInteger(habit.periodDays, 7),
     weekly_days: normalizeWeeklyDays(habit.weeklyDays || []),
@@ -185,6 +189,34 @@ function normalizePositiveInteger(value, fallback) {
 
 function normalizeWeeklyDays(days) {
   return [...new Set(days.map((day) => Number(day)).filter((day) => day >= 0 && day <= 6))].sort();
+}
+
+function deriveLegacyGoalCount(originalPrompt, unit, targetCount) {
+  if (isGenericGoalUnit(unit)) {
+    return 1;
+  }
+
+  const parsed = parseGoalCountFromText(originalPrompt, unit);
+  if (parsed > 0) {
+    return parsed;
+  }
+
+  return normalizePositiveInteger(targetCount, 1);
+}
+
+function isGenericGoalUnit(unit) {
+  const raw = String(unit || "").trim().toLowerCase();
+  return raw === "session" || raw === "sessions" || raw === "time" || raw === "times";
+}
+
+function parseGoalCountFromText(text, unit) {
+  const lower = String(text || "").toLowerCase();
+  const match = lower.match(new RegExp(`(\\d[\\d,]*)\\s+${escapeRegExp(unit)}\\b`));
+  return match ? normalizePositiveInteger(match[1].replace(/,/g, ""), 0) : 0;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function quotePostgrestValue(value) {

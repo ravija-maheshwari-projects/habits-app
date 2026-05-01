@@ -23,6 +23,7 @@ function initializeDatabase() {
       original_prompt TEXT NOT NULL,
       category TEXT NOT NULL,
       unit TEXT NOT NULL,
+      goal_count INTEGER NOT NULL DEFAULT 1,
       target_count INTEGER NOT NULL,
       period_days INTEGER NOT NULL,
       weekly_days TEXT NOT NULL,
@@ -40,6 +41,8 @@ function initializeDatabase() {
       FOREIGN KEY (habit_id) REFERENCES habits(id) ON DELETE CASCADE
     );
   `);
+
+  ensureColumn("habits", "goal_count", "INTEGER NOT NULL DEFAULT 1");
 }
 
 function getState() {
@@ -57,6 +60,7 @@ function listHabits() {
   return database
     .prepare(
       `SELECT id, name, original_prompt, category, unit, target_count, period_days, weekly_days, created_at
+              , goal_count
        FROM habits
        ORDER BY created_at DESC`
     )
@@ -82,6 +86,7 @@ function createHabit(input) {
     originalPrompt: input.originalPrompt,
     category: input.category,
     unit: input.unit,
+    goalCount: input.goalCount,
     targetCount: input.targetCount,
     periodDays: input.periodDays,
     weeklyDays: input.weeklyDays,
@@ -91,8 +96,8 @@ function createHabit(input) {
   database
     .prepare(
       `INSERT INTO habits (
-        id, name, original_prompt, category, unit, target_count, period_days, weekly_days, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        id, name, original_prompt, category, unit, goal_count, target_count, period_days, weekly_days, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       habit.id,
@@ -100,6 +105,7 @@ function createHabit(input) {
       habit.originalPrompt,
       habit.category,
       habit.unit,
+      habit.goalCount,
       habit.targetCount,
       habit.periodDays,
       JSON.stringify(habit.weeklyDays),
@@ -113,6 +119,7 @@ function findHabitById(habitId) {
   const row = database
     .prepare(
       `SELECT id, name, original_prompt, category, unit, target_count, period_days, weekly_days, created_at
+              , goal_count
        FROM habits
        WHERE id = ?`
     )
@@ -173,6 +180,7 @@ function mapHabitRow(row) {
     originalPrompt: row.original_prompt,
     category: row.category,
     unit: row.unit,
+    goalCount: row.goal_count || 1,
     targetCount: row.target_count,
     periodDays: row.period_days,
     weeklyDays: parseWeeklyDays(row.weekly_days),
@@ -198,6 +206,15 @@ function parseWeeklyDays(value) {
   } catch (error) {
     return [];
   }
+}
+
+function ensureColumn(tableName, columnName, columnDefinition) {
+  const columns = database.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+
+  database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
 }
 
 module.exports = {
