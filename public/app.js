@@ -1,13 +1,10 @@
 import {
-  clearPendingSyncDeletes,
   createHabit,
   deleteEntry,
   deleteHabit,
   getState as getLocalState,
+  hydrateFromServer,
   initializeStorage,
-  getPendingSyncDeletes,
-  mergeRemoteState,
-  queuePendingSyncDeletes,
   updateHabit,
   upsertEntry
 } from "./storage.js";
@@ -15,13 +12,18 @@ import {
 const state = {
   habits: [],
   entries: [],
+  tasks: loadTasks(),
+  events: loadEvents(),
   selectedHabitId: null,
-  activeView: "today",
-  lastMainView: "today",
+  activeView: "calendar",
+  lastMainView: "calendar",
   isComposerOpen: false,
   composerMode: "create",
+  composerKind: "habit",
   editingHabitId: null,
+  editingTaskId: null,
   isLogSheetOpen: false,
+  isAddChooserOpen: false,
   selectedLogDate: "",
   selectedLogHabitId: null,
   detailMonthOffset: 0,
@@ -29,13 +31,46 @@ const state = {
   storageReady: false
 };
 
+function loadTasks() {
+  try {
+    const raw = localStorage.getItem("hp.tasks.v1");
+    if (!raw) return seedTasks();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : seedTasks();
+  } catch { return seedTasks(); }
+}
+
+function saveTasks() {
+  try { localStorage.setItem("hp.tasks.v1", JSON.stringify(state.tasks)); } catch {}
+}
+
+function loadEvents() {
+  // Events are read-only mirrors of an upstream calendar (e.g. Google Calendar).
+  // The wrapper seeds them; in the real app this is replaced with a pull sync.
+  try {
+    const raw = localStorage.getItem("hp.events.v1");
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function seedTasks() {
+  // Seed a few sample tasks on first run so the screen isn't empty.
+  return [
+    { id: "t1", title: "File expense report",      meta: "Q2 travel\u00a0\u00b7 4 receipts", color: "coral", due: "today",     done: false },
+    { id: "t2", title: "Call dentist",             meta: "reschedule cleaning",         color: "ochre", due: "today",     done: false },
+    { id: "t3", title: "Buy birthday gift for Theo", meta: "",                          color: "plum",  due: "this-week", done: false },
+    { id: "t4", title: "Renew car registration",   meta: "expires May 14",              color: "coral", due: "this-week", done: false },
+    { id: "t5", title: "Read CRDT paper",          meta: "saved 2 weeks ago",           color: "sage",  due: "someday",   done: false },
+    { id: "t6", title: "Reply to Mira about retreat", meta: "",                         color: "sky",   due: "someday",   done: false }
+  ];
+}
+
 const SWIPE_TRIGGER = 76;
 const SWIPE_MAX = 132;
-const EDGE_BACK_START = 28;
-const EDGE_BACK_TRIGGER = 84;
-const DEVICE_ID_KEY = "habitai-device-id";
-
-let syncInFlight = false;
 
 /* ── Poster palette + illustration mapping ──────────────────── */
 const COLOR_KEYS = ["coral", "ochre", "sage", "plum", "sky"];
@@ -98,14 +133,18 @@ function applyAccent(el, colorKey) {
 const elements = {
   appHeader: document.querySelector("#app-header"),
   headerKicker: document.querySelector("#header-kicker"),
-  headerAvatar: document.querySelector(".header-avatar"),
   headerTitle: document.querySelector("#header-title"),
   headerSubtitle: document.querySelector("#header-subtitle"),
   todayView: document.querySelector("#today-view"),
+  calendarView: document.querySelector("#calendar-view"),
+  tasksView: document.querySelector("#tasks-view"),
   insightsView: document.querySelector("#insights-view"),
   habitDetailView: document.querySelector("#habit-detail-view"),
   navItems: [...document.querySelectorAll("[data-nav-view]")],
   floatingAddButton: document.querySelector("#floating-add-button"),
+  addChooserModal: document.querySelector("#add-chooser-modal"),
+  addChooserBackdrop: document.querySelector("#add-chooser-backdrop"),
+  addChooserRows: [...document.querySelectorAll("[data-add-kind]")],
   composerModal: document.querySelector("#composer-modal"),
   composerBackdrop: document.querySelector("#composer-backdrop"),
   composerSheet: document.querySelector(".composer-sheet"),
@@ -125,8 +164,27 @@ const elements = {
   logSheetSkip: document.querySelector("#log-sheet-skip"),
   logSheetClear: document.querySelector("#log-sheet-clear"),
   logSheetCancel: document.querySelector("#log-sheet-cancel"),
+  rescheduleModal: document.querySelector("#reschedule-sheet-modal"),
+  rescheduleBackdrop: document.querySelector("#reschedule-backdrop"),
+  rescheduleStepPick: document.querySelector('.reschedule-step[data-step="pick"]'),
+  rescheduleStepScope: document.querySelector('.reschedule-step[data-step="scope"]'),
+  rescheduleKicker: document.querySelector("#reschedule-kicker"),
+  rescheduleTitle: document.querySelector("#reschedule-title"),
+  rescheduleCurrent: document.querySelector("#reschedule-current"),
+  rescheduleScopeSummary: document.querySelector("#reschedule-scope-summary"),
+  rescheduleDayRow: document.querySelector("#reschedule-day-row"),
+  rescheduleTimeChips: document.querySelector("#reschedule-time-chips"),
+  rescheduleTimeInput: document.querySelector("#reschedule-time-input"),
+  rescheduleSkipToday: document.querySelector("#reschedule-skip-today"),
+  rescheduleContinue: document.querySelector("#reschedule-continue"),
+  rescheduleCancel: document.querySelector("#reschedule-cancel"),
+  rescheduleScopeToday: document.querySelector("#reschedule-scope-today"),
+  rescheduleScopeEvery: document.querySelector("#reschedule-scope-every"),
+  rescheduleScopeBack: document.querySelector("#reschedule-scope-back"),
   todayCardTemplate: document.querySelector("#today-card-template"),
-  habitRowTemplate: document.querySelector("#habit-row-template")
+  habitRowTemplate: document.querySelector("#habit-row-template"),
+  taskRowTemplate: document.querySelector("#task-row-template"),
+  calendarBlockTemplate: document.querySelector("#calendar-block-template")
 };
 
 const today = currentDateString();
@@ -144,7 +202,7 @@ async function boot() {
     await refreshState();
 
     if (state.isOnline) {
-      await syncCloudBackup();
+      await hydrateLocalStore();
     }
 
     await registerServiceWorker();
@@ -155,7 +213,19 @@ async function boot() {
 }
 
 function bindEvents() {
-  elements.floatingAddButton.addEventListener("click", () => openComposer());
+  elements.floatingAddButton.addEventListener("click", openAddChooser);
+  elements.addChooserBackdrop.addEventListener("click", closeAddChooser);
+  elements.addChooserRows.forEach((row) => {
+    row.addEventListener("click", () => {
+      const kind = row.dataset.addKind;
+      closeAddChooser();
+      if (kind === "habit") {
+        openComposer();
+      } else if (kind === "task") {
+        openTaskComposer();
+      }
+    });
+  });
   elements.composerBackdrop.addEventListener("click", closeComposer);
   elements.logSheetBackdrop.addEventListener("click", closeLogSheet);
   initializeComposerSheetDismiss();
@@ -200,8 +270,7 @@ function bindEvents() {
           name: customTitle,
           category: inference.category,
           originalPrompt: description,
-          unit: inference.goal?.unit,
-          goalCount: inference.goal?.targetCount,
+          unit: inference.cadence?.unit,
           targetCount: inference.cadence?.targetCount,
           periodDays: inference.cadence?.periodDays,
           weeklyDays: inference.cadence?.weeklyDays
@@ -214,8 +283,7 @@ function bindEvents() {
           name: inference.name,
           category: inference.category,
           originalPrompt: description,
-          unit: inference.goal?.unit,
-          goalCount: inference.goal?.targetCount,
+          unit: inference.cadence?.unit,
           targetCount: inference.cadence?.targetCount,
           periodDays: inference.cadence?.periodDays,
           weeklyDays: inference.cadence?.weeklyDays
@@ -228,9 +296,6 @@ function bindEvents() {
       closeComposer();
       setActiveView("habitDetail");
       await refreshState();
-      if (state.isOnline) {
-        await syncCloudBackup();
-      }
     } catch (error) {
       console.error(error);
       setComposerFeedback(
@@ -242,9 +307,10 @@ function bindEvents() {
   });
 
   elements.todayView.addEventListener("click", handleViewActions);
+  elements.calendarView.addEventListener("click", handleCalendarActions);
+  elements.tasksView.addEventListener("click", handleTasksActions);
   elements.habitDetailView.addEventListener("click", handleViewActions);
   elements.insightsView.addEventListener("click", handleViewActions);
-  initializeDetailEdgeBack();
   elements.logSheetDone.addEventListener("click", () => void saveSelectedLogDate("done"));
   elements.logSheetSkip.addEventListener("click", () => void saveSelectedLogDate("skipped"));
   elements.logSheetClear.addEventListener("click", () => void clearSelectedLogDate());
@@ -255,7 +321,8 @@ function bindEvents() {
     updateNetworkStatus();
 
     if (state.storageReady) {
-      await syncCloudBackup();
+      await hydrateLocalStore();
+      await refreshState();
     }
   });
 
@@ -264,105 +331,6 @@ function bindEvents() {
     updateNetworkStatus();
     render();
   });
-}
-
-function initializeDetailEdgeBack() {
-  const view = elements.habitDetailView;
-  let pointerId = null;
-  let startX = 0;
-  let startY = 0;
-  let dragging = false;
-  let tracking = false;
-
-  function resetView() {
-    view.classList.remove("is-edge-backing");
-    view.style.removeProperty("--edge-back-x");
-    view.style.removeProperty("--edge-back-opacity");
-  }
-
-  view.addEventListener("pointerdown", (event) => {
-    if (state.activeView !== "habitDetail" || state.isComposerOpen || state.isLogSheetOpen) {
-      return;
-    }
-
-    if (event.pointerType === "mouse" && event.button !== 0) {
-      return;
-    }
-
-    if (event.clientX > EDGE_BACK_START) {
-      return;
-    }
-
-    pointerId = event.pointerId;
-    startX = event.clientX;
-    startY = event.clientY;
-    tracking = true;
-    dragging = false;
-  });
-
-  view.addEventListener("pointermove", (event) => {
-    if (!tracking || event.pointerId !== pointerId) {
-      return;
-    }
-
-    const dx = event.clientX - startX;
-    const dy = event.clientY - startY;
-
-    if (!dragging) {
-      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) {
-        tracking = false;
-        pointerId = null;
-        return;
-      }
-
-      if (dx < 6) {
-        return;
-      }
-
-      if (Math.abs(dx) > Math.abs(dy) * 1.2) {
-        dragging = true;
-        view.classList.add("is-edge-backing");
-        if (typeof view.setPointerCapture === "function") {
-          view.setPointerCapture(pointerId);
-        }
-      } else {
-        return;
-      }
-    }
-
-    const resisted = Math.min(Math.max(dx, 0), 140) * 0.92;
-    const opacity = Math.max(0.7, 1 - resisted / 320);
-    view.style.setProperty("--edge-back-x", `${resisted}px`);
-    view.style.setProperty("--edge-back-opacity", `${opacity}`);
-  });
-
-  function finish(event) {
-    if (event.pointerId !== pointerId) {
-      return;
-    }
-
-    const dx = event.clientX - startX;
-    const shouldGoBack = dragging && dx >= EDGE_BACK_TRIGGER;
-
-    if (dragging && typeof view.releasePointerCapture === "function" && view.hasPointerCapture(pointerId)) {
-      view.releasePointerCapture(pointerId);
-    }
-
-    pointerId = null;
-    tracking = false;
-    dragging = false;
-
-    if (shouldGoBack) {
-      resetView();
-      setActiveView(state.lastMainView || "today");
-      return;
-    }
-
-    resetView();
-  }
-
-  view.addEventListener("pointerup", finish);
-  view.addEventListener("pointercancel", finish);
 }
 
 function handleViewActions(event) {
@@ -442,9 +410,6 @@ async function saveEntry(habitId, status, options = {}) {
     if (!options.skipRefresh) {
       await refreshState();
     }
-    if (state.isOnline) {
-      await syncCloudBackup();
-    }
   } catch (error) {
     console.error(error);
     setComposerFeedback("Could not save that status.");
@@ -463,20 +428,10 @@ async function confirmAndDeleteHabit(habitId) {
   }
 
   try {
-    const relatedEntryKeys = state.entries
-      .filter((entry) => entry.habitId === habitId)
-      .map((entry) => entry.key || `${entry.habitId}:${entry.date}`);
-    await queuePendingSyncDeletes({
-      habitIds: [habitId],
-      entryKeys: relatedEntryKeys
-    });
     await deleteHabit(habitId);
     state.selectedHabitId = state.habits.find((item) => item.id !== habitId)?.id || null;
     setActiveView("today");
     await refreshState();
-    if (state.isOnline) {
-      await syncCloudBackup();
-    }
   } catch (error) {
     console.error(error);
     setComposerFeedback("Could not delete the habit. Please try again.");
@@ -501,21 +456,38 @@ async function refreshState() {
 
 function render() {
   renderChrome();
+  renderCalendarView();
   renderTodayView();
+  renderTasksView();
   renderInsightsView();
   renderHabitDetailView();
   renderComposer();
   renderLogSheet();
+  renderAddChooser();
 }
 
 function renderChrome() {
   const headerMap = {
-    today: {
+    calendar: {
       kicker: formatFriendlyDate(parseLocalDate(today)).toUpperCase(),
-      title: posterTitleFromCounts(),
+      title: posterTitleForCalendar(),
       subtitle: "",
       variant: "poster",
       accent: "coral"
+    },
+    today: {
+      kicker: formatFriendlyDate(parseLocalDate(today)).toUpperCase(),
+      title: "habits",
+      subtitle: "",
+      variant: "poster",
+      accent: "coral"
+    },
+    tasks: {
+      kicker: posterKickerForTasks(),
+      title: 'Tasks <em>&amp; loose ends.</em>',
+      subtitle: "",
+      variant: "poster",
+      accent: "ochre"
     },
     insights: {
       kicker: "Insights · last 30 days",
@@ -525,36 +497,51 @@ function renderChrome() {
       accent: "coral"
     },
     habitDetail: {
-      kicker: "",
-      title: "",
+      kicker: getCurrentMonthLabel().toUpperCase(),
+      title: posterTitleForHabit(selectedHabit()),
       subtitle: "",
       variant: "plain",
       accent: selectedHabit() ? colorForHabit(selectedHabit()) : "coral"
     }
   };
 
-  const chrome = headerMap[state.activeView] || headerMap.today;
-  const hideHeader = state.activeView === "habitDetail";
-  document.body.classList.toggle("is-habit-detail", hideHeader);
+  const chrome = headerMap[state.activeView] || headerMap.calendar;
   elements.headerKicker.textContent = chrome.kicker;
   elements.headerTitle.innerHTML = chrome.title;
   elements.headerSubtitle.textContent = chrome.subtitle;
   elements.headerSubtitle.hidden = !chrome.subtitle;
-  elements.headerAvatar.hidden = hideHeader;
-  elements.appHeader.hidden = hideHeader;
 
   elements.appHeader.dataset.variant = chrome.variant;
+  elements.appHeader.dataset.view = state.activeView;
   applyAccent(elements.appHeader, chrome.accent);
 
   const visibleView = state.activeView === "habitDetail" ? "habitDetail" : state.activeView;
   const activeNavView = state.activeView === "habitDetail" ? state.lastMainView : state.activeView;
+  elements.calendarView.hidden = visibleView !== "calendar";
   elements.todayView.hidden = visibleView !== "today";
+  elements.tasksView.hidden = visibleView !== "tasks";
   elements.insightsView.hidden = visibleView !== "insights";
   elements.habitDetailView.hidden = visibleView !== "habitDetail";
 
   elements.navItems.forEach((item) => {
     item.classList.toggle("is-active", item.dataset.navView === activeNavView);
   });
+}
+
+function posterTitleForCalendar() {
+  const dueToday = state.habits.filter((h) => isHabitScheduledOnDate(h, parseLocalDate(today))).length;
+  const eventsToday = (state.events || []).filter((e) => e.date === today).length;
+  const total = dueToday + eventsToday;
+  if (!total) return 'A blank <em>day.</em>';
+  const word = numberWord(total);
+  // Phrase: "Two things." vs "One thing."
+  return `${capitalize(word)}<br/><em>${total === 1 ? "thing." : "things."}</em>`;
+}
+
+function posterKickerForTasks() {
+  const open = state.tasks.filter((t) => !t.done).length;
+  const done = state.tasks.length - open;
+  return `${open} OPEN · ${done} DONE`;
 }
 
 function posterTitleFromCounts() {
@@ -617,6 +604,413 @@ function renderTodayView() {
   initializeSwipeCards();
 }
 
+/* ── Calendar ────────────────────────────────────────────── */
+function renderCalendarView() {
+  elements.calendarView.innerHTML = "";
+  if (state.activeView !== "calendar") return;
+
+  const dueToday = state.habits.filter((h) => isHabitScheduledOnDate(h, parseLocalDate(today)));
+
+  // Header — week strip
+  const weekStrip = buildWeekStrip();
+  elements.calendarView.appendChild(weekStrip);
+
+  // Pull events for today
+  const todayEvents = (state.events || []).filter((e) => e.date === today);
+
+  if (!dueToday.length && !todayEvents.length) {
+    const empty = document.createElement("div");
+    empty.className = "cal-empty";
+    empty.innerHTML = `
+      <h2>Nothing on the books.</h2>
+      <p>Tap + to add a habit or task — they'll show up here when they're due.</p>
+    `;
+    elements.calendarView.appendChild(empty);
+    return;
+  }
+
+  // Build unified item list (habit blocks + event blocks)
+  const items = [
+    ...dueToday.map((h) => ({
+      kind: "habit",
+      habit: h,
+      entry: entryForHabitAndDate(h.id, today),
+      hour: defaultHourForHabit(h),
+      minute: 0
+    })),
+    ...todayEvents.map((e) => {
+      const [hh, mm] = (e.start || "09:00").split(":").map(Number);
+      const [eh, em] = (e.end || "10:00").split(":").map(Number);
+      return {
+        kind: "event",
+        event: e,
+        hour: hh,
+        minute: mm || 0,
+        endHour: eh,
+        endMinute: em || 0
+      };
+    })
+  ].sort((a, b) => (a.hour * 60 + a.minute) - (b.hour * 60 + b.minute));
+
+  // Bucket into morning / afternoon / evening
+  const buckets = [
+    { id: "morning",   label: "Morning",   meta: "until noon",        range: [0, 12]  },
+    { id: "afternoon", label: "Afternoon", meta: "noon → 5pm",        range: [12, 17] },
+    { id: "evening",   label: "Evening",   meta: "after 5pm",         range: [17, 30] }
+  ];
+
+  const stack = document.createElement("section");
+  stack.className = "cal-buckets";
+
+  // Determine current bucket so we can highlight it
+  const nowH = new Date().getHours();
+  const currentBucket = buckets.find((b) => nowH >= b.range[0] && nowH < b.range[1])?.id;
+
+  buckets.forEach((bucket) => {
+    const inBucket = items.filter((it) => it.hour >= bucket.range[0] && it.hour < bucket.range[1]);
+    if (!inBucket.length) return;
+
+    const section = document.createElement("section");
+    section.className = "cal-bucket";
+    if (bucket.id === currentBucket) section.dataset.current = "true";
+
+    const head = document.createElement("header");
+    head.className = "cal-bucket-head";
+
+    const lbl = document.createElement("h3");
+    lbl.className = "cal-bucket-label";
+    lbl.textContent = bucket.label;
+
+    const meta = document.createElement("span");
+    meta.className = "cal-bucket-meta";
+    meta.textContent = bucket.meta;
+
+    head.appendChild(lbl);
+    head.appendChild(meta);
+    section.appendChild(head);
+
+    const list = document.createElement("div");
+    list.className = "cal-bucket-list";
+    inBucket.forEach((it) => {
+      const block = it.kind === "event"
+        ? buildCalendarEventBlock(it.event, it.hour, it.minute, (it.endHour - it.hour) * 60 + (it.endMinute - it.minute))
+        : buildCalendarBlock(it.habit, it.entry, it.hour, 60);
+      list.appendChild(block);
+    });
+    section.appendChild(list);
+    stack.appendChild(section);
+  });
+
+  elements.calendarView.appendChild(stack);
+}
+
+function buildWeekStrip() {
+  const wrap = document.createElement("div");
+  wrap.className = "cal-week-strip";
+  const todayDate = parseLocalDate(today);
+  const dow = todayDate.getDay(); // 0=Sun
+  // Build last 3 + today + next 3
+  for (let i = -3; i <= 3; i += 1) {
+    const d = new Date(todayDate);
+    d.setDate(todayDate.getDate() + i);
+    const cell = document.createElement("button");
+    cell.type = "button";
+    cell.className = "cal-week-cell";
+    if (i === 0) cell.dataset.active = "true";
+    const day = document.createElement("span");
+    day.className = "cal-week-day";
+    day.textContent = ["S", "M", "T", "W", "T", "F", "S"][d.getDay()];
+    const num = document.createElement("span");
+    num.className = "cal-week-num";
+    num.textContent = String(d.getDate());
+    cell.appendChild(day);
+    cell.appendChild(num);
+    wrap.appendChild(cell);
+  }
+  return wrap;
+}
+
+function defaultHourForHabit(habit) {
+  const cat = (habit.category || "").toLowerCase();
+  if (cat.includes("movement") || cat.includes("strength")) {
+    // morning movement, evening lift
+    if (cat.includes("strength")) return 18;
+    return 7;
+  }
+  if (cat.includes("focus")) return 21;
+  if (cat.includes("mind")) return 20;
+  if (cat.includes("sleep")) return 22;
+  if (cat.includes("wellness")) return 14;
+  // fallback by id hash to spread across the day
+  const hours = [9, 12, 15, 18];
+  return hours[hashStringToIndex(habit.id, hours.length)];
+}
+
+function formatHour12(h) {
+  const mer = h >= 12 ? "pm" : "am";
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${h12} ${mer}`;
+}
+
+function formatTime12(h, m) {
+  const mer = h >= 12 ? "pm" : "am";
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${h12}:${String(m).padStart(2, "0")} ${mer}`;
+}
+
+function buildCalendarBlock(habit, entry, hour, duration) {
+  const fragment = elements.calendarBlockTemplate.content.cloneNode(true);
+  const block = fragment.querySelector(".cal-block");
+  const status = entry?.status || "pending";
+  const colorKey = colorForHabit(habit);
+  block.dataset.kind = "habit";
+  block.dataset.state = status;
+  block.dataset.habitId = habit.id;
+  applyAccent(block, colorKey);
+
+  const illoKey = illoForHabit(habit);
+  const illo = block.querySelector(".cal-tile-illo");
+  if (illo) illo.src = `/illustrations/${illoKey}.svg`;
+
+  block.querySelector(".cal-block-time").textContent = formatTime12(hour, 0);
+  block.querySelector(".cal-block-title").textContent = habit.name || "Habit";
+  const meta = block.querySelector(".cal-block-meta");
+  if (status === "done") meta.textContent = "Done — nice.";
+  else if (status === "skipped") meta.textContent = "Skipped today";
+  else meta.textContent = scheduleLabel(habit);
+
+  block.querySelector(".cal-block-check").dataset.calBlockToggle = habit.id;
+  return block;
+}
+
+function buildCalendarEventBlock(event, hour, minute, duration) {
+  const block = document.createElement("article");
+  block.className = "cal-event";
+  block.dataset.kind = "event";
+  block.dataset.eventId = event.id || "";
+  block.dataset.source = event.source || "google";
+
+  // Color hint by calendar
+  const cal = (event.calendar || "").toLowerCase();
+  const colorKey =
+    cal.includes("work")     ? "ochre"  :
+    cal.includes("personal") ? "sage"   :
+    cal.includes("family")   ? "coral"  :
+                               "ink";
+  applyAccent(block, colorKey);
+
+  const endMinutes = hour * 60 + minute + duration;
+  const eh = Math.floor(endMinutes / 60);
+  const em = endMinutes % 60;
+
+  const time = document.createElement("div");
+  time.className = "cal-event-time";
+  const start = document.createElement("strong");
+  start.textContent = formatTime12(hour, minute);
+  const end = document.createElement("span");
+  end.textContent = formatTime12(eh, em);
+  time.appendChild(start);
+  time.appendChild(end);
+
+  const body = document.createElement("div");
+  body.className = "cal-event-body";
+
+  const title = document.createElement("h3");
+  title.className = "cal-event-title";
+  title.textContent = event.title || "Event";
+  body.appendChild(title);
+
+  const metaParts = [];
+  if (event.location) metaParts.push(event.location);
+  if (event.calendar) metaParts.push(event.calendar);
+  if (metaParts.length) {
+    const meta = document.createElement("p");
+    meta.className = "cal-event-meta";
+    meta.textContent = metaParts.join(" · ");
+    body.appendChild(meta);
+  }
+
+  // Tiny source glyph (G for Google)
+  const source = document.createElement("span");
+  source.className = "cal-event-source";
+  source.textContent = event.source === "google" ? "G" : "·";
+  source.title = event.source === "google" ? "Google Calendar" : "Calendar";
+
+  block.appendChild(time);
+  block.appendChild(body);
+  block.appendChild(source);
+  return block;
+}
+
+function handleCalendarActions(event) {
+  const button = event.target.closest("button");
+  if (button?.dataset.calBlockToggle) {
+    const habitId = button.dataset.calBlockToggle;
+    const entry = entryForHabitAndDate(habitId, today);
+    const next = entry?.status === "done" ? "skipped" : "done";
+    void saveEntry(habitId, next);
+    return;
+  }
+  const block = event.target.closest(".cal-block[data-habit-id]");
+  if (block) {
+    state.selectedHabitId = block.dataset.habitId;
+    setActiveView("habitDetail");
+  }
+}
+
+function scheduleLabel(habit) {
+  if (habit.weeklyDays?.length === 7) return "Daily";
+  if (habit.weeklyDays?.length) {
+    const names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    return habit.weeklyDays.map((d) => names[d]).join(" · ");
+  }
+  return "Scheduled today";
+}
+
+function hashStringToIndex(s, mod) {
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h) % mod;
+}
+
+/* ── Tasks ───────────────────────────────────────────────── */
+function renderTasksView() {
+  elements.tasksView.innerHTML = "";
+  if (state.activeView !== "tasks") return;
+
+  const wrap = document.createElement("section");
+  wrap.className = "tasks-stack";
+
+  if (!state.tasks.length) {
+    const empty = document.createElement("div");
+    empty.className = "cal-empty";
+    empty.innerHTML = `
+      <h2>Nothing on your plate.</h2>
+      <p>Tap + to capture a one-off — errands, follow-ups, anything that doesn't repeat.</p>
+    `;
+    wrap.appendChild(empty);
+    elements.tasksView.appendChild(wrap);
+    return;
+  }
+
+  const groups = [
+    { id: "today",     title: "TODAY",     hint: "do today" },
+    { id: "this-week", title: "THIS WEEK", hint: "by friday" },
+    { id: "someday",   title: "SOMEDAY",   hint: "no rush" }
+  ];
+
+  groups.forEach((group) => {
+    const items = state.tasks.filter((t) => (t.due || "someday") === group.id);
+    if (!items.length) return;
+    const open = items.filter((t) => !t.done).length;
+
+    const groupEl = document.createElement("div");
+    groupEl.className = "task-group";
+    groupEl.innerHTML = `
+      <div class="task-group-head">
+        <div class="task-group-title">${group.title} <em>${open} open</em></div>
+        <div class="task-group-hint">${escapeHtml(group.hint)}</div>
+      </div>
+      <div class="task-group-list" data-task-group="${group.id}"></div>
+    `;
+    const list = groupEl.querySelector(".task-group-list");
+    items.forEach((task) => list.appendChild(buildTaskRow(task)));
+    wrap.appendChild(groupEl);
+  });
+
+  elements.tasksView.appendChild(wrap);
+}
+
+function buildTaskRow(task) {
+  const fragment = elements.taskRowTemplate.content.cloneNode(true);
+  const row = fragment.querySelector(".task-row");
+  row.dataset.taskId = task.id;
+  row.dataset.done = String(!!task.done);
+  applyAccent(row, task.color || "coral");
+
+  row.querySelector(".task-checkbox").dataset.taskToggle = task.id;
+  const tag = row.querySelector(".task-tag");
+  if (tag) tag.style.background = `var(--${task.color || "coral"})`;
+
+  row.querySelector(".task-title").textContent = task.title || "Untitled";
+  const metaEl = row.querySelector(".task-meta");
+  if (task.meta) metaEl.textContent = task.meta;
+  else metaEl.remove();
+  return row;
+}
+
+function handleTasksActions(event) {
+  const button = event.target.closest("button");
+  if (button?.dataset.taskToggle) {
+    const id = button.dataset.taskToggle;
+    const task = state.tasks.find((t) => t.id === id);
+    if (!task) return;
+    task.done = !task.done;
+    saveTasks();
+    render();
+    return;
+  }
+
+  const row = event.target.closest(".task-row[data-task-id]");
+  if (row) {
+    openTaskComposer(row.dataset.taskId);
+  }
+}
+
+/* ── Add chooser ─────────────────────────────────────────── */
+function openAddChooser() {
+  state.isAddChooserOpen = true;
+  elements.floatingAddButton.classList.add("is-open");
+  elements.floatingAddButton.setAttribute("aria-expanded", "true");
+  renderAddChooser();
+}
+
+function closeAddChooser() {
+  state.isAddChooserOpen = false;
+  elements.floatingAddButton.classList.remove("is-open");
+  elements.floatingAddButton.setAttribute("aria-expanded", "false");
+  renderAddChooser();
+}
+
+function renderAddChooser() {
+  elements.addChooserModal.hidden = !state.isAddChooserOpen;
+}
+
+/* ── Task composer (lightweight prompt; reuses pattern) ───── */
+function openTaskComposer(taskId) {
+  const existing = taskId ? state.tasks.find((t) => t.id === taskId) : null;
+  const titleStr = window.prompt(existing ? "Edit task" : "New task — what is it?", existing?.title || "");
+  if (titleStr === null) return;
+  const title = titleStr.trim();
+  if (!title) {
+    if (existing) {
+      // Empty title on edit = delete
+      if (window.confirm(`Delete "${existing.title}"?`)) {
+        state.tasks = state.tasks.filter((t) => t.id !== existing.id);
+        saveTasks();
+        render();
+      }
+    }
+    return;
+  }
+
+  if (existing) {
+    existing.title = title;
+  } else {
+    state.tasks.unshift({
+      id: `t${Date.now().toString(36)}`,
+      title,
+      meta: "",
+      color: COLOR_KEYS[state.tasks.length % COLOR_KEYS.length],
+      due: "today",
+      done: false
+    });
+  }
+  saveTasks();
+  if (state.activeView !== "tasks") setActiveView("tasks");
+  else render();
+}
+
 /* ── Insights ────────────────────────────────────────────── */
 function renderInsightsView() {
   elements.insightsView.innerHTML = "";
@@ -641,14 +1035,16 @@ function renderInsightsView() {
   const totalDone = state.entries.filter((e) => e.status === "done" && last30Set.has(e.date)).length;
   const rate = totalScheduled ? Math.round((totalDone / totalScheduled) * 100) : 0;
 
-  // strongest current streak across all habits (completed cadence windows)
+  // best streak across all habits (consecutive days "done" on scheduled days)
   let bestStreak = 0;
   let bestStreakHabit = "";
+  let bestStreakUnit = "days";
   state.habits.forEach((habit) => {
-    const streak = currentCompletedWindowStreakForHabit(habit);
+    const streak = longestStreakForHabit(habit);
     if (streak > bestStreak) {
       bestStreak = streak;
       bestStreakHabit = habit.name;
+      bestStreakUnit = isWeeklyHabit(habit) ? "weeks" : "days";
     }
   });
 
@@ -656,8 +1052,8 @@ function renderInsightsView() {
   kpiRow.className = "kpi-row";
   kpiRow.innerHTML = `
     <div class="kpi kpi-hero">
-      <div class="kpi-label">Current streak</div>
-      <div class="kpi-num">${bestStreak} <em>${bestStreak === 1 ? "window" : "windows"}</em></div>
+      <div class="kpi-label">Best streak</div>
+      <div class="kpi-num">${bestStreak} <em>${bestStreak === 1 ? bestStreakUnit.slice(0, -1) : bestStreakUnit}</em></div>
       <div class="kpi-sub">${bestStreakHabit ? `on ${escapeHtml(bestStreakHabit)}` : "log a habit to begin"}</div>
     </div>
     <div class="kpi">
@@ -773,69 +1169,122 @@ function computeWeekdayStats() {
   return [stats[1], stats[2], stats[3], stats[4], stats[5], stats[6], stats[0]];
 }
 
-function currentCompletedWindowStreakForHabit(habit) {
-  const windows = buildStreakWindowsForHabit(habit);
-  let streak = 0;
+function longestStreakForHabit(habit) {
+  if (isWeeklyHabit(habit)) {
+    return longestWeeklyStreakForHabit(habit, buildLastNDates(180));
+  }
 
-  for (let index = windows.length - 1; index >= 0; index -= 1) {
-    const window = windows[index];
-    if (isStreakWindowComplete(habit, window)) {
-      streak += 1;
+  if (isDailyHabit(habit)) {
+    return longestDailyStreakForHabit(habit, buildLastNDates(180));
+  }
+
+  const dates = buildLastNDates(180).slice().reverse();
+  let best = 0;
+  let cur = 0;
+  for (const d of dates) {
+    const date = parseLocalDate(d);
+    if (!isHabitScheduledOnDate(habit, date)) continue;
+    const e = state.entries.find((row) => row.habitId === habit.id && row.date === d);
+    if (e?.status === "done") {
+      cur += 1;
+      if (cur > best) best = cur;
     } else {
-      break;
+      cur = 0;
+    }
+  }
+  return best;
+}
+
+function longestStreakForHabitInMonth(habit, year, month) {
+  const dates = buildMonthDates(year, month);
+
+  if (isWeeklyHabit(habit)) {
+    return longestWeeklyStreakForHabit(habit, dates);
+  }
+
+  if (isDailyHabit(habit)) {
+    return longestDailyStreakForHabit(habit, dates);
+  }
+
+  let best = 0;
+  let cur = 0;
+  for (const d of dates) {
+    const date = parseLocalDate(d);
+    if (!isHabitScheduledOnDate(habit, date)) continue;
+    const e = state.entries.find((row) => row.habitId === habit.id && row.date === d);
+    if (e?.status === "done") {
+      cur += 1;
+      if (cur > best) best = cur;
+    } else {
+      cur = 0;
+    }
+  }
+  return best;
+}
+
+function longestDailyStreakForHabit(habit, dates) {
+  let best = 0;
+  let cur = 0;
+
+  for (const d of dates.slice().reverse()) {
+    const entry = state.entries.find((row) => row.habitId === habit.id && row.date === d);
+    if (entry?.status === "done") {
+      cur += 1;
+      if (cur > best) best = cur;
+    } else {
+      cur = 0;
     }
   }
 
-  return streak;
+  return best;
 }
 
-function buildStreakWindowsForHabit(habit) {
-  if (habit.weeklyDays?.length || habit.periodDays === 7) {
-    return buildRollingWeekWindows(26);
+function longestWeeklyStreakForHabit(habit, dates) {
+  const weekKeys = [...new Set(dates.map((date) => weekKeyForDate(date)))].sort();
+  let best = 0;
+  let cur = 0;
+
+  for (const weekKey of weekKeys) {
+    const weekDates = dates.filter((date) => weekKeyForDate(date) === weekKey);
+    const completed = countWeeklyCompletions(habit, weekDates);
+    const target = Math.max(habit.targetCount || 1, 1);
+
+    if (completed >= target) {
+      cur += 1;
+      if (cur > best) best = cur;
+    } else {
+      cur = 0;
+    }
   }
 
-  if (habit.periodDays === 1) {
-    return buildRollingDayWindows(90);
-  }
-
-  if (habit.periodDays === 30) {
-    return buildRollingMonthWindows(12);
-  }
-
-  if (habit.periodDays === 365) {
-    return buildRollingYearWindows(5);
-  }
-
-  return buildFixedPeriodWindows(habit.periodDays || 7, 26);
+  return best;
 }
 
-function isStreakWindowComplete(habit, window) {
-  const entries = window.dates
-    .map((date) => entryForHabitAndDate(habit.id, date))
-    .filter(Boolean);
-
-  if (habit.weeklyDays?.length) {
-    const scheduledDates = window.dates.filter((date) => isHabitScheduledOnDate(habit, parseLocalDate(date)));
-    if (!scheduledDates.length) {
+function countWeeklyCompletions(habit, weekDates) {
+  return weekDates.filter((date) => {
+    const parsed = parseLocalDate(date);
+    if (habit.weeklyDays?.length && !habit.weeklyDays.includes(parsed.getDay())) {
       return false;
     }
-    return scheduledDates.every((date) => entryForHabitAndDate(habit.id, date)?.status === "done");
-  }
 
-  if (usesWindowQuotaTarget(habit)) {
-    const doneCount = entries.filter((entry) => entry.status === "done").length;
-    return doneCount >= habit.targetCount;
-  }
+    const entry = state.entries.find((row) => row.habitId === habit.id && row.date === date);
+    return entry?.status === "done";
+  }).length;
+}
 
-  if (window.kind === "day") {
-    return entries.some((entry) => entry.status === "done");
-  }
+function weekKeyForDate(dateString) {
+  const date = parseLocalDate(dateString);
+  const start = new Date(date);
+  start.setDate(date.getDate() - date.getDay());
+  return formatLocalDate(start);
+}
 
-  const scheduledDates = window.dates.filter((date) => isHabitScheduledOnDate(habit, parseLocalDate(date)));
-  if (!scheduledDates.length) {
-    return false;
-  }
-  return scheduledDates.every((date) => entryForHabitAndDate(habit.id, date)?.status === "done");
+function isDailyHabit(habit) {
+  return !habit.weeklyDays?.length && habit.periodDays === 1;
+}
+
+function isWeeklyHabit(habit) {
+  return Boolean(habit.weeklyDays?.length) || habit.periodDays === 7;
 }
 
 function setDetailMonthOffset(next) {
@@ -866,89 +1315,12 @@ function buildLastNDates(n) {
 }
 
 function buildLastNWeeks(n) {
+  const all = buildLastNDates(n * 7);
   const weeks = [];
-  const currentWeekStart = startOfWeekMonday(parseLocalDate(today));
-
-  for (let i = n - 1; i >= 0; i -= 1) {
-    const weekStart = new Date(currentWeekStart);
-    weekStart.setDate(currentWeekStart.getDate() - i * 7);
-    const weekDates = [];
-
-    for (let offset = 0; offset < 7; offset += 1) {
-      const next = new Date(weekStart);
-      next.setDate(weekStart.getDate() + offset);
-      weekDates.push(formatLocalDate(next));
-    }
-
-    weeks.push(weekDates);
+  for (let i = 0; i < n; i += 1) {
+    weeks.push(all.slice(i * 7, (i + 1) * 7));
   }
-
   return weeks;
-}
-
-function buildRollingDayWindows(n) {
-  return buildLastNDates(n).map((date) => ({
-    kind: "day",
-    dates: [date]
-  }));
-}
-
-function buildRollingWeekWindows(n) {
-  return buildLastNWeeks(n).map((dates) => ({
-    kind: "week",
-    dates
-  }));
-}
-
-function buildRollingMonthWindows(n) {
-  const months = [];
-  const base = parseLocalDate(today);
-
-  for (let index = n - 1; index >= 0; index -= 1) {
-    const monthDate = new Date(base.getFullYear(), base.getMonth() - index, 1);
-    months.push({
-      kind: "month",
-      dates: buildMonthDates(monthDate.getFullYear(), monthDate.getMonth())
-    });
-  }
-
-  return months;
-}
-
-function buildRollingYearWindows(n) {
-  const years = [];
-  const currentYear = parseLocalDate(today).getFullYear();
-
-  for (let year = currentYear - (n - 1); year <= currentYear; year += 1) {
-    years.push({
-      kind: "year",
-      dates: buildYearDates(year)
-    });
-  }
-
-  return years;
-}
-
-function buildFixedPeriodWindows(periodDays, count) {
-  const end = parseLocalDate(today);
-  const windows = [];
-
-  for (let index = count - 1; index >= 0; index -= 1) {
-    const windowEnd = new Date(end);
-    windowEnd.setDate(end.getDate() - index * periodDays);
-    const dates = [];
-    for (let offset = periodDays - 1; offset >= 0; offset -= 1) {
-      const d = new Date(windowEnd);
-      d.setDate(windowEnd.getDate() - offset);
-      dates.push(formatLocalDate(d));
-    }
-    windows.push({
-      kind: "period",
-      dates
-    });
-  }
-
-  return windows;
 }
 
 /* ── Habit Detail ────────────────────────────────────────── */
@@ -983,17 +1355,18 @@ function renderHabitDetailView() {
   const calendarDays = buildMonthCalendarDays(habit, activeInfo.year, activeInfo.month);
   const scheduledThisMonth = calendarDays.filter((d) => d.isScheduled).length;
   const doneThisMonth = monthEntries.filter((r) => r.status === "done").length;
+  const skippedThisMonth = monthEntries.filter((r) => r.status === "skipped").length;
   const monthPct = scheduledThisMonth ? Math.round((doneThisMonth / scheduledThisMonth) * 100) : 0;
-  const streak = currentCompletedWindowStreakForHabit(habit);
-  const currentWindowStats = calculateHabitProgress(habit);
+  const streak = activeInfo.isCurrent ? longestStreakForHabit(habit) : longestStreakForHabitInMonth(habit, activeInfo.year, activeInfo.month);
 
   const shell = document.createElement("section");
   shell.className = "detail-shell";
   applyAccent(shell, colorKey);
   shell.style.setProperty("color-scheme", "light");
   shell.innerHTML = `
-    <div class="detail-actions-top">
+    <div class="detail-topbar">
       <button class="back-button" data-back-to-view="${state.lastMainView}" type="button">‹ Back</button>
+      <span class="detail-topbar-label">${activeInfo.longLabel}</span>
     </div>
 
     <div class="detail-hero">
@@ -1024,7 +1397,7 @@ function renderHabitDetailView() {
         </div>
         <div class="detail-stat-mini">
           <div class="detail-stat-mini-label">Done</div>
-          <div class="detail-stat-mini-num">${currentWindowStats.completed}<span class="of">/${currentWindowStats.target}</span></div>
+          <div class="detail-stat-mini-num">${doneThisMonth}<span class="of">/${scheduledThisMonth || 0}</span></div>
         </div>
       </div>
     </div>
@@ -1185,15 +1558,11 @@ function buildTodayCard(habit, entry) {
 }
 
 function compactCadence(habit) {
-  const parts = [];
-
-  if (hasMeaningfulGoal(habit)) {
-    parts.push(goalSummary(habit));
-  }
-
-  parts.push(cadenceSummary(habit));
-
-  return parts.join(" · ");
+  const days = habit.weeklyDays?.length
+    ? habit.weeklyDays.map(shortDayName).join(" · ")
+    : `every ${habit.periodDays} day${habit.periodDays === 1 ? "" : "s"}`;
+  const target = `${habit.targetCount} ${habit.unit}`;
+  return `${target} · ${days}`;
 }
 
 function initializeSwipeCards() {
@@ -1426,32 +1795,15 @@ function progressWindowForHabit(habit) {
     return { kind: "daily", dates: [today], summaryLabel: "Today", trackLabel: "Daily" };
   }
 
-  if (habit.periodDays === 7) {
+  if (habit.periodDays <= 7) {
     return { kind: "weekly", dates: buildCurrentWeekDates(), summaryLabel: "This week", trackLabel: "Weekly" };
   }
 
-  if (habit.periodDays === 30) {
-    return { kind: "monthly", dates: buildCurrentMonthDates(), summaryLabel: "This month", trackLabel: "Monthly" };
-  }
-
-  if (habit.periodDays === 365) {
-    return { kind: "yearly", dates: buildCurrentYearDates(), summaryLabel: "This year", trackLabel: "Yearly" };
-  }
-
-  if (habit.periodDays > 1) {
-    return {
-      kind: "period",
-      dates: buildCurrentPeriodDates(habit.periodDays),
-      summaryLabel: "Current window",
-      trackLabel: "Tracking window"
-    };
-  }
-
-  return { kind: "daily", dates: [today], summaryLabel: "Today", trackLabel: "Daily" };
+  return { kind: "monthly", dates: buildCurrentMonthDates(), summaryLabel: "This month", trackLabel: "Monthly" };
 }
 
 function targetOccurrencesForWindow(habit, window) {
-  if (usesWindowQuotaTarget(habit)) {
+  if (habit.unit === "times") {
     return habit.targetCount;
   }
 
@@ -1466,16 +1818,9 @@ function targetOccurrencesForWindow(habit, window) {
   return 1;
 }
 
-function usesWindowQuotaTarget(habit) {
-  return !habit.weeklyDays?.length && normalizePositiveInteger(habit.targetCount, 1) > 1;
-}
-
 function buildEmptyCard(title, copy) {
   const card = document.createElement("section");
   card.className = "empty-card";
-  if (title === "No habits yet") {
-    card.classList.add("empty-card--top-spaced");
-  }
   card.innerHTML = `
     <div class="panel-title">Nothing here yet</div>
     <h2>${escapeHtml(title)}</h2>
@@ -1662,14 +2007,10 @@ function animateViewTransition(previousView, nextView) {
 }
 
 function getViewElement(viewName) {
-  if (viewName === "habitDetail") {
-    return elements.habitDetailView;
-  }
-
-  if (viewName === "insights") {
-    return elements.insightsView;
-  }
-
+  if (viewName === "habitDetail") return elements.habitDetailView;
+  if (viewName === "insights")    return elements.insightsView;
+  if (viewName === "calendar")    return elements.calendarView;
+  if (viewName === "tasks")       return elements.tasksView;
   return elements.todayView;
 }
 
@@ -1683,53 +2024,10 @@ function entryForHabitAndDate(habitId, date) {
 
 function cadenceExplanation(habit) {
   if (habit.weeklyDays?.length) {
-    return hasMeaningfulGoal(habit)
-      ? `Tracking on ${habit.weeklyDays.map(shortDayName).join(", ")} · target ${goalSummary(habit)}.`
-      : `Tracking on ${habit.weeklyDays.map(shortDayName).join(", ")}.`;
+    return `Tracking on ${habit.weeklyDays.map(shortDayName).join(", ")} · target ${habit.targetCount} ${habit.unit}.`;
   }
 
-  if (habit.periodDays === 1 && habit.targetCount === 1) {
-    return hasMeaningfulGoal(habit)
-      ? `Tracking daily · target ${goalSummary(habit)}.`
-      : "Tracking daily.";
-  }
-
-  return hasMeaningfulGoal(habit)
-    ? `Tracking ${cadenceSummary(habit)} · target ${goalSummary(habit)}.`
-    : `Tracking ${cadenceSummary(habit)}.`;
-}
-
-function cadenceFrequencyLabel(habit) {
-  if (habit.periodDays === 1) {
-    return "daily";
-  }
-
-  return `every ${habit.periodDays} day${habit.periodDays === 1 ? "" : "s"}`;
-}
-
-function cadenceSummary(habit) {
-  if (habit.weeklyDays?.length) {
-    return habit.weeklyDays.map(shortDayName).join(" · ");
-  }
-
-  if (habit.periodDays === 1 && habit.targetCount === 1) {
-    return "daily";
-  }
-
-  if (normalizePositiveInteger(habit.targetCount, 1) > 1) {
-    return `${habit.targetCount} times · ${cadenceFrequencyLabel(habit)}`;
-  }
-
-  return cadenceFrequencyLabel(habit);
-}
-
-function goalSummary(habit) {
-  return `${formatCount(habit.goalCount || 1)} ${habit.unit || "session"}`;
-}
-
-function hasMeaningfulGoal(habit) {
-  const unit = String(habit.unit || "").trim().toLowerCase();
-  return normalizePositiveInteger(habit.goalCount, 1) > 1 || (unit && unit !== "session");
+  return `Tracking ${habit.targetCount} ${habit.unit} every ${habit.periodDays} day${habit.periodDays === 1 ? "" : "s"}.`;
 }
 
 function renderLogSheet() {
@@ -1803,14 +2101,6 @@ function buildCurrentMonthDates() {
   return buildMonthDates(base.getFullYear(), base.getMonth());
 }
 
-function buildCurrentYearDates() {
-  return buildYearDates(parseLocalDate(today).getFullYear());
-}
-
-function buildCurrentPeriodDates(periodDays) {
-  return buildLastNDates(Math.max(periodDays, 1));
-}
-
 function buildMonthDates(year, month) {
   const days = [];
   const lastDay = new Date(year, month + 1, 0).getDate();
@@ -1823,7 +2113,10 @@ function buildMonthDates(year, month) {
 
 function buildCurrentWeekDates() {
   const dates = [];
-  const start = startOfWeekMonday(parseLocalDate(today));
+  const base = parseLocalDate(today);
+  const dayOfWeek = base.getDay();
+  const start = new Date(base);
+  start.setDate(base.getDate() - dayOfWeek);
 
   for (let index = 0; index < 7; index += 1) {
     const next = new Date(start);
@@ -1832,14 +2125,6 @@ function buildCurrentWeekDates() {
   }
 
   return dates;
-}
-
-function startOfWeekMonday(date) {
-  const start = new Date(date);
-  const dayOfWeek = start.getDay();
-  const offset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-  start.setDate(start.getDate() - offset);
-  return start;
 }
 
 function getCurrentMonthLabel() {
@@ -1893,15 +2178,6 @@ function capitalize(value) {
   return String(value).charAt(0).toUpperCase() + String(value).slice(1);
 }
 
-function normalizePositiveInteger(value, fallback) {
-  const normalized = Number(value);
-  return Number.isInteger(normalized) && normalized > 0 ? normalized : fallback;
-}
-
-function formatCount(value) {
-  return normalizePositiveInteger(value, 1).toLocaleString();
-}
-
 function isHabitScheduledOnDate(habit, date) {
   if (habit.weeklyDays?.length) {
     return habit.weeklyDays.includes(date.getDay());
@@ -1935,14 +2211,8 @@ async function clearSelectedLogDate() {
   const selectedDate = state.selectedLogDate;
 
   try {
-    await queuePendingSyncDeletes({
-      entryKeys: [`${state.selectedLogHabitId}:${selectedDate}`]
-    });
     await deleteEntry(state.selectedLogHabitId, selectedDate);
     await refreshState();
-    if (state.isOnline) {
-      await syncCloudBackup();
-    }
   } catch (error) {
     console.error(error);
   }
@@ -1966,48 +2236,18 @@ async function requestPersistentStorage() {
   }
 }
 
-async function syncCloudBackup() {
-  if (!state.isOnline || syncInFlight) {
-    return;
-  }
-
-  syncInFlight = true;
-
+async function hydrateLocalStore() {
   try {
-    const deviceId = getStableDeviceId();
-    const pendingDeletes = await getPendingSyncDeletes();
-    const remoteState = await fetchJson(`/api/sync/pull?deviceId=${encodeURIComponent(deviceId)}`);
+    const result = await hydrateFromServer(fetchJson);
 
-    if (remoteState?.configured === false) {
-      return;
-    }
-
-    const mergeResult = await mergeRemoteState(remoteState, {
-      pendingHabitDeletes: pendingDeletes.habitIds,
-      pendingEntryDeletes: pendingDeletes.entryKeys
-    });
-
-    if (mergeResult.imported) {
+    if (result.imported) {
+      setComposerFeedback(
+        `Imported ${result.counts.habits} habits and ${result.counts.entries} entries.`
+      );
       await refreshState();
     }
-
-    const localState = await getLocalState();
-    const pushResult = await postJson("/api/sync/push", {
-      deviceId,
-      habits: localState.habits,
-      entries: localState.entries,
-      pendingDeletes
-    });
-
-    if (pushResult?.configured === false) {
-      return;
-    }
-
-    await clearPendingSyncDeletes();
   } catch (error) {
     console.error(error);
-  } finally {
-    syncInFlight = false;
   }
 }
 
@@ -2043,47 +2283,4 @@ async function postJson(url, body) {
   }
 
   return response.json();
-}
-
-function getStableDeviceId() {
-  try {
-    const existing = localStorage.getItem(DEVICE_ID_KEY);
-    if (existing) {
-      return existing;
-    }
-  } catch (error) {
-    console.error(error);
-  }
-
-  const fingerprintId = buildDeviceFingerprintId();
-
-  try {
-    localStorage.setItem(DEVICE_ID_KEY, fingerprintId);
-  } catch (error) {
-    console.error(error);
-  }
-
-  return fingerprintId;
-}
-
-function buildDeviceFingerprintId() {
-  const parts = [
-    navigator.userAgent || "",
-    navigator.language || "",
-    navigator.platform || "",
-    Intl.DateTimeFormat().resolvedOptions().timeZone || "",
-    String(screen.width || ""),
-    String(screen.height || ""),
-    String(screen.colorDepth || ""),
-    String(navigator.hardwareConcurrency || ""),
-    String(navigator.maxTouchPoints || "")
-  ];
-  const raw = parts.join("|");
-  let hash = 0;
-
-  for (let index = 0; index < raw.length; index += 1) {
-    hash = ((hash << 5) - hash + raw.charCodeAt(index)) | 0;
-  }
-
-  return `device_${Math.abs(hash).toString(16)}`;
 }
